@@ -1,33 +1,33 @@
-# thcode
+<p align="center">
+  <img src="thcode_logo.png" alt="thcode logo" width="300">
+</p>
 
-Benchmarking Thai LLMs on agentic coding tasks.
+Exploring how Thai LLMs perform as the backbone for agentic AI coding tools.
 
 ## About
 
-thcode evaluates how well Thai-language large language models perform when used as the backbone for agentic AI coding tools like [Claude Code](https://docs.anthropic.com/en/docs/claude-code), [OpenAI Codex](https://openai.com/codex), and [opencode](https://opencode.ai).
+thcode is an experiment in using Thai-language large language models with agentic coding harnesses like [Claude Code](https://docs.anthropic.com/en/docs/claude-code), [OpenAI Codex](https://openai.com/codex), and [opencode](https://opencode.ai).
 
-As Thai LLMs continue to develop, there's limited data on their practical utility for complex, multi-step software engineering tasks. This project aims to fill that gap by running standardized agentic workflows against real codebases and measuring results.
+The goal is to see how far Thai LLMs can go when tasked with real, multi-step software engineering work — not just chat, but actual code generation, editing, and reasoning in an agentic loop.
 
-## Models Under Evaluation
+## Available models
 
-| Model          | Parameters | Notes |
-| -------------- | ---------- | ----- |
-| Typhoon-2.5    | 30B        |       |
-| OpenThaiGPT-R1 | 32B        |       |
-| Pathumma-LLM   | 7B         |       |
-| ThaLLE-0.1     | 7B         |       |
+| Model          | Parameters |
+| -------------- | ---------- |
+| Typhoon-2.5    | 30B        |
+| OpenThaiGPT-R1 | 32B        |
+| Pathumma-LLM   | 7B         |
+| ThaLLE-0.1     | 7B         |
 
 ## Roadmap
 
-- [ ] Define evaluation harness and scoring criteria
-- [ ] Set up reproducible test environments
-- [ ] Run benchmarks across all models
-- [ ] Publish results and analysis
-- [ ] Expand to additional Thai LLMs
+- [ ] Set up harness configurations for each model
+- [ ] Document findings and observations
+- [ ] Share results
 
 ## Contributing
 
-Contributions are welcome. Open an issue to discuss proposed changes or additions.
+Contributions are welcome. Open an issue to discuss.
 
 ## License
 
