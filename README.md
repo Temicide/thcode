@@ -1,9 +1,9 @@
 <p align="center">
   <img src="thcode_logo.png" alt="thcode logo" width="300">
 </p>
+<p align="center">Exploring how Thai LLMs perform as the backbone for agentic AI coding tools.</p>
 
-Exploring how Thai LLMs perform as the backbone for agentic AI coding tools.
-
+___
 ## About
 
 thcode is an experiment in using Thai-language large language models with agentic coding harnesses like [Claude Code](https://docs.anthropic.com/en/docs/claude-code), [OpenAI Codex](https://openai.com/codex), and [opencode](https://opencode.ai).
