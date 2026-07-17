@@ -160,6 +160,8 @@ import {
 } from './commands/index.js';
 import { runDependencyPreflight, defaultEnvironmentProbe } from './depPreflight/run.js';
 import type { DepPreflightResult } from './depPreflight/types.js';
+import { runHelloWorldProof } from './proof/index.js';
+import type { ProofEnvironment, ProofResult } from './proof/types.js';
 import { sanitizer } from './security/sanitizer.js';
 
 export interface CoreStatus {
@@ -1160,6 +1162,14 @@ export class CoreApp {
    * profile/TTY (AC #5). */
   runCheck(): DepPreflightResult {
     return runDependencyPreflight(this.workspace, defaultEnvironmentProbe(), this.clock);
+  }
+
+  /** Story 3.11: run the canonical cross-platform C++ Hello, World! proof.
+   * Composes existing 3.5/3.7/3.8 surfaces to prove the bounded task end-to-end
+   * without overstating success. Accepts an injectable ProofEnvironment so tests
+   * use fakes and never run real compilers or touch the real filesystem. */
+  async runHelloWorldProof(env: ProofEnvironment): Promise<ProofResult> {
+    return runHelloWorldProof(env);
   }
 
   /** Story 3.7 AC #1, AC #2: validate a controlled command proposal. Resolves

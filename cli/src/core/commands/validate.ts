@@ -145,24 +145,31 @@ export function validateControlledCommand(
     };
   }
 
-  // Executable must be a simple name (no path separators).
+  // Executable must be a simple name (no path separators) OR a path
+  // that resolves within the workspace (e.g. a compiled binary).
   if (proposal.executable.includes('/') || proposal.executable.includes('\\')) {
-    return {
-      ok: false,
-      refusal: 'denied',
-      reason: 'executable must be a simple name, not a path',
-      reasonCode: 'executable-path-not-permitted',
-    };
+    try {
+      resolveWithinWorkspace(context.workspaceRoot, proposal.executable);
+    } catch {
+      return {
+        ok: false,
+        refusal: 'denied',
+        reason: 'executable path is outside the workspace',
+        reasonCode: 'executable-path-outside-workspace',
+      };
+    }
   }
 
-  // Executable must be in the allowed set.
-  if (!context.allowedExecutables.has(proposal.executable)) {
-    return {
-      ok: false,
-      refusal: 'denied',
-      reason: `executable "${proposal.executable}" is not in the allowed set`,
-      reasonCode: 'executable-not-allowed',
-    };
+  // Executable must be in the allowed set (simple names) or a workspace path.
+  if (!proposal.executable.includes('/') && !proposal.executable.includes('\\')) {
+    if (!context.allowedExecutables.has(proposal.executable)) {
+      return {
+        ok: false,
+        refusal: 'denied',
+        reason: `executable "${proposal.executable}" is not in the allowed set`,
+        reasonCode: 'executable-not-allowed',
+      };
+    }
   }
 
   // --- AC #1: Validate explicit argv vector ---

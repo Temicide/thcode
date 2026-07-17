@@ -420,13 +420,13 @@ describe('Story 3.7 AC #1: Command validation — argv, cwd, env, shell policy, 
     }
   });
 
-  it('rejects executable with path separators', () => {
+  it('rejects executable with path separators outside workspace', () => {
     const proposal = makeProposal({ executable: '/usr/bin/gcc' });
     const result = validateControlledCommand(proposal);
     expect(result.ok).toBe(false);
     if (!result.ok) {
       expect(result.refusal).toBe('denied');
-      expect(result.reasonCode).toBe('executable-path-not-permitted');
+      expect(result.reasonCode).toBe('executable-path-outside-workspace');
     }
   });
 
