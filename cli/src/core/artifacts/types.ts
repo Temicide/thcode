@@ -27,3 +27,29 @@ export interface ArtifactResolver {
   resolve(reference: string, workspaceRoot: string): Promise<ResolvedArtifact>;
   requestConsent(artifact: ResolvedArtifact, destinationHost: string): Promise<ArtifactConsent>;
 }
+
+// --- Story 3.2: Checkpoint and ArtifactStore extensions ---
+// These types extend the artifacts module with checkpoint/artifact store
+// contracts. The canonical definitions live in core/checkpoints/types.ts;
+// re-exported here for convenience and to maintain the artifacts boundary.
+
+export type {
+  CheckpointId,
+  ArtifactId,
+  ContentMetadata,
+  CoverageState,
+  RetentionState,
+  IntegrityState,
+  StageState,
+  CheckpointRecord,
+  ArtifactRecord,
+  MutationMetadata,
+  IntegrityFailure,
+  CheckpointReadResult,
+  ArtifactReadResult,
+  StageResult,
+  CommitResult,
+  ReconcileResult,
+  KeyValueStore,
+  BlobStore,
+} from '../checkpoints/types.js';

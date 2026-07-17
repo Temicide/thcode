@@ -63,6 +63,9 @@ import {
 } from './protocol/commandGrammar.js';
 import { asSessionId, newOperationId } from './protocol/ids.js';
 import type { SessionRepository } from './sessions/repository.js';
+import { CheckpointRepository } from './checkpoints/checkpointRepository.js';
+import { ArtifactStore } from './checkpoints/artifactStore.js';
+import type { KeyValueStore, BlobStore } from './checkpoints/types.js';
 import type {
   AuthorityProjection,
   ConversationProjection,
@@ -593,6 +596,28 @@ export class CoreApp {
    * explicit binding status. A `blocked` binding cannot authorize local effects. */
   workspaceBinding(): WorkspaceIdentity {
     return this.workspace;
+  }
+
+  /** Story 3.2: lazy-init CheckpointRepository accessor. Returns a
+   * CheckpointRepository backed by the given KeyValueStore. When no store is
+   * provided, returns null (checkpointing is unavailable). */
+  private _checkpointRepo: CheckpointRepository | null = null;
+  checkpoints(store?: KeyValueStore): CheckpointRepository | null {
+    if (store) {
+      this._checkpointRepo = new CheckpointRepository(store, this.clock);
+    }
+    return this._checkpointRepo;
+  }
+
+  /** Story 3.2: lazy-init ArtifactStore accessor. Returns an ArtifactStore
+   * backed by the given BlobStore and encryption key. When no store is
+   * provided, returns null (artifact storage is unavailable). */
+  private _artifactStore: ArtifactStore | null = null;
+  artifactStore(blobStore?: BlobStore, key?: Buffer): ArtifactStore | null {
+    if (blobStore && key) {
+      this._artifactStore = new ArtifactStore(blobStore, key);
+    }
+    return this._artifactStore;
   }
 
   /** Story 3.1 AC #2: resolve a candidate path/resource reference against the
