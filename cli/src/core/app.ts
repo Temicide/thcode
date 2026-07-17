@@ -4,6 +4,7 @@
 // child_process directly.
 
 import { AgentLoop, type ApprovalCallback } from './agent/loop.js';
+import { dispatchTyphoonTurn } from './agent/dispatch.js';
 import { ToolCatalog } from './catalog/loader.js';
 import { contextUtilizationPercent, effectiveContextCapacity } from './context/types.js';
 import { NEW_SESSION_DEFAULT, type PermissionProfile, type WorkMode } from './permissions/types.js';
@@ -150,6 +151,35 @@ export class CoreApp {
   }
 
   async runTurn(
+    input: string,
+    _approve: ApprovalCallback = async () => false,
+    onToken?: (delta: string) => void,
+  ): Promise<string> {
+    // Dispatch via the durable sanitized-chunk path (Story 1.9). The legacy
+    // AgentLoop is retained for the tool-call mediation path (Epic 3); the
+    // first-conversation flow uses dispatchTyphoonTurn directly so every chunk
+    // is journaled and interruption boundaries are recorded.
+    const sessionId = `sess-${this.providers.selectedId}`;
+    const messages: NormalizedMessage[] = [...this.history, { role: 'user', content: input }];
+    const clock = () => new Date().toISOString();
+    const result = await dispatchTyphoonTurn({
+      sessionId,
+      promptText: input,
+      providers: this.providers,
+      credentials: this.credentials,
+      messages,
+      clock,
+      onToken,
+    });
+    this.history = [...this.history, { role: 'user', content: input }, { role: 'assistant', content: result.text }];
+    this.estimatedContextTokens = Math.ceil(
+      this.history.reduce((n, m) => n + m.content.length, 0) / 4,
+    );
+    return result.text;
+  }
+
+  /** Legacy Agent Loop entry retained for Epic 3 tool-call mediation. */
+  async runAgentTurn(
     input: string,
     approve: ApprovalCallback = async () => false,
     onToken?: (delta: string) => void,
