@@ -210,8 +210,16 @@ import {
   type ConsentEvaluationResult,
   type PreparedPayloadManifest,
   type TransferConsent,
+  type ConsentReference,
 } from './specialists/consent/index.js';
 import type { PreparedArtifact } from './specialists/artifacts/types.js';
+import {
+  SharedSpecialistAdapter,
+  FetchSpecialistTransport,
+  type SpecialistInvocation,
+  type SpecialistRequestOptions,
+  type SpecialistRequest,
+} from './specialists/adapter/index.js';
 import {
   SpecialistArtifactResolver,
   type ArtifactResolutionResult,
@@ -327,6 +335,8 @@ export class CoreApp {
   private _specialistHealth: SpecialistHealthLifecycle;
   /** Story 4.6: specialist artifact resolver (in-workspace reference resolution). */
   private _specialistArtifactResolver: SpecialistArtifactResolver;
+  /** Story 4.9: lazily-initialized shared specialist adapter. */
+  private _specialistAdapter: SharedSpecialistAdapter | null = null;
 
   constructor(opts: CoreAppOptions = {}) {
     // Fail-closed startup: incompatible protocol major version throws before
@@ -595,6 +605,108 @@ export class CoreApp {
     };
 
     return revalidateSpecialistConsent(consent, current);
+  }
+
+  // --- Story 4.9: Specialist invocation ---
+
+  /**
+   * Invoke a Specialist service. Builds the SpecialistRequest from the
+   * effective configuration, health snapshot, registry entry, prepared
+   * artifacts, prepared manifest, and consent reference. Constructs the
+   * SharedSpecialistAdapter (lazily) with FetchSpecialistTransport, the
+   * injected clock, and a resolveRawKey closure wired to credentials
+   * persistence. Returns the typed SpecialistInvocation — NEVER throws.
+   *
+   * No remote call if validation refuses (fail-closed before transport).
+   */
+  async invokeSpecialist(
+    serviceId: string,
+    preparedArtifacts: readonly PreparedArtifact[],
+    preparedManifest: PreparedPayloadManifest,
+    consentReference: ConsentReference,
+    operationId: string,
+    opts?: Partial<SpecialistRequestOptions>,
+  ): Promise<SpecialistInvocation> {
+    // Build the effective configuration.
+    const configResult = await this.buildSpecialistConfiguration(serviceId);
+    if (!configResult.ok) {
+      // Config build failure (e.g. missing credential) → the service is not in
+      // an invokable state. `non-invokable-entry` is the accurate refusal cause
+      // (NOT `handler-not-registered`, which is reserved for missing per-service
+      // handlers and is determined inside the adapter).
+      return {
+        ok: false,
+        refused: true,
+        cause: 'non-invokable-entry',
+        safeMessage: `Cannot invoke "${serviceId}": configuration could not be built (${configResult.detail}).`,
+        operationId,
+        serviceId,
+      };
+    }
+
+    const effectiveConfiguration = configResult.configuration;
+
+    // Get the health snapshot.
+    const healthSnapshot = this._specialistHealth.snapshot(serviceId);
+
+    // Get the registry entry.
+    const registry = this.capabilityRegistry();
+    if (!registry.ok) {
+      return {
+        ok: false,
+        refused: true,
+        cause: 'non-invokable-entry',
+        safeMessage: 'Cannot invoke a Specialist: Capability Registry is not loaded.',
+        operationId,
+        serviceId,
+      };
+    }
+
+    const entry = registry.byId(serviceId);
+    if (!entry) {
+      return {
+        ok: false,
+        refused: true,
+        cause: 'non-invokable-entry',
+        safeMessage: `Service "${serviceId}" is not present in the Capability Registry.`,
+        operationId,
+        serviceId,
+      };
+    }
+
+    // Build the SpecialistRequest.
+    const request: SpecialistRequest = {
+      serviceId,
+      contractVersion: effectiveConfiguration.contractVersion,
+      manifestVersion: effectiveConfiguration.manifestVersion,
+      effectiveConfiguration,
+      preparedManifest,
+      consentReference,
+      operationId,
+      preparedArtifacts,
+      options: {
+        timeoutMs: opts?.timeoutMs ?? effectiveConfiguration.requestConfig.timeoutMs,
+        maxRetries: opts?.maxRetries ?? effectiveConfiguration.requestConfig.maxRetries,
+      },
+      startedAt: this.clock(),
+    };
+
+    // Lazily initialize the adapter.
+    if (!this._specialistAdapter) {
+      this._specialistAdapter = new SharedSpecialistAdapter({
+        transport: new FetchSpecialistTransport(),
+        clock: this.clock,
+        resolveRawKey: async () => {
+          const key = await this.credentials.get('aiforthai');
+          if (key === null) {
+            throw new Error('AI-for-Thai credential not available.');
+          }
+          return key;
+        },
+      });
+    }
+
+    return this._specialistAdapter.invoke(request, entry, healthSnapshot);
   }
 
   // --- Story 4.3: AI-for-Thai credential JIT onboarding ---
