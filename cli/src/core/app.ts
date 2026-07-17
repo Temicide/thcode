@@ -11,6 +11,13 @@ import { mediateToolResult } from './agent/toolResultMediation.js';
 import type { MediationDeps } from './agent/toolResultMediation.js';
 import { handleLifecycleStep } from './agent/lifecycle.js';
 import type { LifecycleDeps } from './agent/lifecycle.js';
+import {
+  aggregateTerminals,
+  revalidateAuthorityForNextEffect,
+  type TerminalAggregatorDeps,
+  type RevalidateNextEffectInput,
+  type RevalidateNextEffectResult,
+} from './agent/terminals.js';
 import type {
   ProposalToValidate,
   ProposalValidationResult,
@@ -20,6 +27,9 @@ import type {
   ValidationContext,
   MediationContext,
   LifecycleContext,
+  AggregateRoundOutcome,
+  OperationTerminalState,
+  RevalidationContext,
 } from './agent/types.js';
 import { ToolCatalog } from './catalog/loader.js';
 import {
@@ -1430,6 +1440,52 @@ export class CoreApp {
     };
     const deps: LifecycleDeps = { sanitizer };
     return handleLifecycleStep(hasValidNext, terminalResponse, ctx, deps);
+  }
+
+  // --- Story 3.10: Terminal aggregation + authority revalidation ---
+
+  /**
+   * Aggregate per-operation terminal states into a Prompt Round outcome
+   * (Story 3.10 AC #1). Selects the strongest unresolved state, names all
+   * included + excluded effects, and only publishes completion after durable
+   * post-commit Evidence.
+   */
+  aggregateTerminals(
+    operations: readonly OperationTerminalState[],
+    postCommitEvidenceCommitted: boolean,
+    modelExplanation: string | null = null,
+  ): AggregateRoundOutcome {
+    const a = this.activation.snapshot();
+    const deps: TerminalAggregatorDeps = {
+      clock: this.clock,
+      activationRevision: a.revision,
+      authorityRevision: a.revision,
+      matrixVersion: 1,
+      policyVersion: 1,
+      workspaceId: a.workspaceId,
+    };
+    return aggregateTerminals(operations, deps, postCommitEvidenceCommitted, modelExplanation);
+  }
+
+  /**
+   * Revalidate authority for the next effect before it starts (Story 3.10 AC #2).
+   * When a loop operation is cancelled, Runtime Activation changes, Full Access
+   * is revoked, or a Boundary Expansion is revoked, this revalidates authority
+   * revision, exact action identity, Workspace, checkpoint authorization, quota,
+   * platform state, and cancellation immediately. Pending/prepared work is denied
+   * WITHOUT consuming one-shot authority.
+   */
+  revalidateNextEffect(input: RevalidateNextEffectInput): RevalidateNextEffectResult {
+    const a = this.activation.snapshot();
+    const ctx: RevalidationContext = {
+      activationId: a.activationId,
+      activationRevision: a.revision,
+      authorityRevision: a.revision,
+      workspaceId: a.workspaceId,
+      workspaceRoot: this.workspaceRoot,
+      clock: this.clock,
+    };
+    return revalidateAuthorityForNextEffect(input, ctx);
   }
 
   /** Legacy Agent Loop entry retained for Epic 3 tool-call mediation. */
