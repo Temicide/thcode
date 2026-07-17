@@ -15,6 +15,7 @@ import { HealthRegistry, type HealthSnapshot } from './providers/health.js';
 import { typhoonGeneration, typhoonHealthProbe } from './providers/typhoonHealth.js';
 import { createDefaultToolRegistry, type ToolRegistry } from './tools/registry.js';
 import { assertCompatibleVersion, PROTOCOL_MAJOR } from './protocol/coreProtocol.js';
+import type { ConversationProjection, StatusProjection, TranscriptTurnProjection } from './protocol/projections.js';
 
 export interface CoreStatus {
   readonly mode: WorkMode;
@@ -105,6 +106,56 @@ export class CoreApp {
       modelId: caps.modelId,
       contextPercent: contextUtilizationPercent(this.estimatedContextTokens, capacity),
       healthState: this.health.snapshot(this.providers.selectedId).state,
+    };
+  }
+
+  /** Canonical StatusProjection (AD-2, UX-DR-031). Same fields across Ink,
+   * redirected text, and headless JSON. */
+  statusProjection(): StatusProjection {
+    const caps = this.providers.selected.capabilities;
+    const capacity = effectiveContextCapacity(caps.contextLimit);
+    const percent = contextUtilizationPercent(this.estimatedContextTokens, capacity);
+    return {
+      workMode: this.mode,
+      permissionProfile: this.profile,
+      fullAccess: this.profile === 'full-access',
+      providerId: this.providers.selectedId,
+      modelId: caps.modelId,
+      healthState: this.health.snapshot(this.providers.selectedId).state,
+      contextPercent: Number.isFinite(percent) ? percent : 'percentage unavailable',
+      enforcementVerified: false,
+    };
+  }
+
+  /** Canonical ConversationProjection (AD-2). The UI calls this — it never
+   * builds its own authoritative transcript. Derives transcript turns from
+   * the in-memory history; durable journal replay (Epic 6) feeds this too. */
+  query(): ConversationProjection {
+    const transcript: TranscriptTurnProjection[] = this.history.map((m, i) => ({
+      promptRoundId: `round-${i}`,
+      role: m.role,
+      text: m.content,
+      timestamp: new Date().toISOString(),
+      interrupted: false,
+      evidenceComplete: 'complete' as const,
+    }));
+    const caps = this.providers.selected.capabilities;
+    const capacity = effectiveContextCapacity(caps.contextLimit);
+    return {
+      status: this.statusProjection(),
+      session: {
+        sessionId: `sess-${this.providers.selectedId}`,
+        name: 'current',
+        workspaceRoot: this.workspaceRoot,
+        lastActivity: new Date().toISOString(),
+      },
+      transcript,
+      context: {
+        estimatedTokens: this.estimatedContextTokens,
+        effectiveCapacity: capacity,
+        utilizationPercent: contextUtilizationPercent(this.estimatedContextTokens, capacity),
+        pinnedTurnCount: 0,
+      },
     };
   }
 

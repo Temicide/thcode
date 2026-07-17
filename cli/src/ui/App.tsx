@@ -23,7 +23,8 @@ export function App({ core }: AppProps) {
     { who: 'system', text: 'thcode prototype — /plan /build /models /permissions /tools /exit' },
   ]);
   const [, forceRender] = useState(0);
-  const status = core.status();
+  const projection = core.query();
+  const status = projection.status;
 
   const push = useCallback((who: TranscriptLine['who'], text: string) => {
     setLines((prev) => [...prev, { who, text }]);
@@ -54,7 +55,7 @@ export function App({ core }: AppProps) {
           // TODO(permission-selector): interactive Permission Selector modal (ADR 0012).
           push(
             'system',
-            `Permission Profile: ${core.status().profile}\n` +
+            `Permission Profile: ${core.query().status.permissionProfile}\n` +
               '(Placeholder — interactive Permission Selector is a planned feature.)',
           );
           return;
@@ -116,22 +117,23 @@ export function App({ core }: AppProps) {
   });
 
   const statusRow = useMemo(() => {
-    const modeLabel = status.mode.toUpperCase();
+    const modeLabel = status.workMode.toUpperCase();
     const profileLabel =
-      status.profile === 'full-access'
+      status.permissionProfile === 'full-access'
         ? 'Full Access'
-        : status.profile.charAt(0).toUpperCase() + status.profile.slice(1);
+        : status.permissionProfile.charAt(0).toUpperCase() + status.permissionProfile.slice(1);
     return (
       <Box gap={1}>
-        <Text inverse color={status.mode === 'plan' ? 'cyan' : 'green'}>
+        <Text inverse color={status.workMode === 'plan' ? 'cyan' : 'green'}>
           {` ${modeLabel} `}
         </Text>
         <Text color="magenta">[{status.providerId}]</Text>
         <Text color="yellow">[Permissions: {profileLabel}]</Text>
+        <Text color={status.healthState === 'available' ? 'green' : 'red'}>[{status.healthState}]</Text>
         <Text dimColor>Shift+Tab: plan/build</Text>
       </Box>
     );
-  }, [status.mode, status.profile, status.providerId]);
+  }, [status.workMode, status.permissionProfile, status.providerId, status.healthState]);
 
   return (
     <Box flexDirection="column" paddingX={1}>
