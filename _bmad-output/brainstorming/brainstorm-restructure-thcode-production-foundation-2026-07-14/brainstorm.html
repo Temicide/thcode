@@ -1,0 +1,169 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <title>thcode — Production Foundation / Brainstorm Field Record</title>
+  <style>
+    :root{--ink:#dce8e5;--muted:#81918f;--paper:#08100f;--paper2:#0c1715;--cyan:#60f1d1;--amber:#ffb84d;--red:#ff6b5f;--line:rgba(146,188,180,.18);--panel:rgba(11,25,22,.78);--mx:50%;--my:20%;}
+    *{box-sizing:border-box}
+    html{scroll-behavior:smooth;background:var(--paper)}
+    body{margin:0;color:var(--ink);font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace;background:
+      radial-gradient(circle at var(--mx) var(--my),rgba(65,226,194,.085),transparent 26rem),
+      linear-gradient(rgba(96,241,209,.025) 1px,transparent 1px),linear-gradient(90deg,rgba(96,241,209,.025) 1px,transparent 1px),var(--paper);background-size:auto,32px 32px,32px 32px;overflow-x:hidden}
+    body:before{content:"";position:fixed;inset:0;pointer-events:none;z-index:20;background:linear-gradient(transparent 50%,rgba(0,0,0,.055) 50%);background-size:100% 4px;mix-blend-mode:overlay}
+    a{color:inherit;text-decoration:none}
+    button{font:inherit}
+    .rail{position:fixed;z-index:30;left:20px;top:50%;transform:translateY(-50%);display:grid;gap:12px}
+    .rail a{width:7px;height:7px;border:1px solid var(--muted);border-radius:50%;transition:.25s;background:var(--paper)}
+    .rail a.on{background:var(--cyan);border-color:var(--cyan);box-shadow:0 0 16px var(--cyan)}
+    .progress{position:fixed;z-index:31;top:0;left:0;height:2px;width:0;background:linear-gradient(90deg,var(--cyan),var(--amber));box-shadow:0 0 15px var(--cyan)}
+    .topline{position:absolute;left:clamp(24px,6vw,96px);right:clamp(24px,6vw,96px);top:28px;display:flex;justify-content:space-between;gap:16px;color:var(--muted);font-size:10px;letter-spacing:.14em;text-transform:uppercase;z-index:3}
+    .live:before{content:"";display:inline-block;width:6px;height:6px;margin-right:8px;border-radius:50%;background:var(--cyan);box-shadow:0 0 12px var(--cyan);animation:pulse 2s infinite}
+    section{position:relative;min-height:100svh;padding:clamp(80px,10vw,150px) clamp(24px,8vw,130px);border-top:1px solid var(--line)}
+    .hero{height:100svh;min-height:680px;border:0;display:grid;align-content:center;overflow:hidden}
+    .hero-copy{position:relative;z-index:2;max-width:1150px}
+    .kicker{font-size:11px;letter-spacing:.26em;text-transform:uppercase;color:var(--cyan);margin-bottom:28px}
+    h1,h2,h3,p{margin-top:0}
+    h1{font-family:Inter,Arial,sans-serif;font-weight:700;letter-spacing:-.065em;font-size:clamp(66px,11vw,178px);line-height:.76;margin-bottom:40px}
+    h1 span{display:block;color:transparent;-webkit-text-stroke:1px rgba(220,232,229,.42);transform:translateX(clamp(20px,8vw,130px))}
+    .hero-deck{max-width:700px;font-family:Inter,Arial,sans-serif;font-size:clamp(18px,2vw,27px);line-height:1.4;color:#a9bab6;margin-left:clamp(3px,8vw,130px)}
+    .hero-deck b{color:var(--ink);font-weight:500}
+    .scroll-cue{position:absolute;bottom:34px;right:clamp(24px,6vw,96px);font-size:10px;letter-spacing:.18em;text-transform:uppercase;color:var(--muted);writing-mode:vertical-rl}
+    .scroll-cue:after{content:"";display:inline-block;height:70px;width:1px;background:linear-gradient(var(--cyan),transparent);margin-top:14px;animation:drop 2s ease infinite}
+    .orbit{position:absolute;border:1px solid rgba(96,241,209,.12);border-radius:50%;width:min(70vw,850px);aspect-ratio:1;right:-15%;top:4%;animation:turn 45s linear infinite}
+    .orbit:before,.orbit:after{content:"";position:absolute;border:1px dashed rgba(255,184,77,.17);border-radius:50%;inset:13%}.orbit:after{inset:33%;border-color:rgba(96,241,209,.2)}
+    .orbit i{position:absolute;display:block;width:10px;height:10px;border-radius:50%;background:var(--amber);top:23%;left:5%;box-shadow:0 0 28px var(--amber)}
+    .section-id{display:flex;align-items:center;gap:18px;color:var(--cyan);font-size:11px;letter-spacing:.2em;text-transform:uppercase;margin-bottom:50px}
+    .section-id:after{content:"";height:1px;width:90px;background:var(--cyan);opacity:.45}
+    h2{font-family:Inter,Arial,sans-serif;font-weight:650;letter-spacing:-.045em;font-size:clamp(42px,6vw,92px);line-height:.94;max-width:1000px;margin-bottom:28px}
+    .lead{font-family:Inter,Arial,sans-serif;font-size:clamp(17px,2vw,24px);line-height:1.5;max-width:760px;color:#a4b5b1;margin-bottom:60px}
+    .lead strong{color:var(--ink);font-weight:500}
+    .question{padding:18px 0 18px clamp(20px,4vw,64px);border-left:2px solid var(--amber);color:var(--amber);max-width:880px;font-family:Inter,Arial,sans-serif;font-size:clamp(20px,2.6vw,38px);line-height:1.25;margin:30px 0 70px}
+    .radar-layout{display:grid;grid-template-columns:minmax(300px,1fr) minmax(320px,.9fr);gap:clamp(35px,8vw,120px);align-items:center}
+    .radar{position:relative;width:min(76vw,540px);aspect-ratio:1;border-radius:50%;border:1px solid rgba(96,241,209,.35);background:repeating-radial-gradient(circle,transparent 0 15.9%,rgba(96,241,209,.13) 16% 16.3%,transparent 16.5% 32%);overflow:hidden}
+    .radar:before,.radar:after{content:"";position:absolute;background:rgba(96,241,209,.23)}.radar:before{width:1px;height:100%;left:50%}.radar:after{height:1px;width:100%;top:50%}
+    .sweep{position:absolute;inset:0;border-radius:50%;background:conic-gradient(from 0deg,transparent 0 75%,rgba(96,241,209,.03) 82%,rgba(96,241,209,.35));animation:turn 6s linear infinite}
+    .blip{position:absolute;width:11px;height:11px;border:1px solid var(--cyan);border-radius:50%;background:var(--paper);box-shadow:0 0 14px rgba(96,241,209,.7)}
+    .blip:after{content:attr(data-l);position:absolute;left:17px;top:-3px;white-space:nowrap;color:var(--ink);font-size:10px;letter-spacing:.08em}.b1{left:31%;top:22%}.b2{left:65%;top:31%}.b3{left:72%;top:64%}.b4{left:30%;top:70%}
+    .signal-list{display:grid;gap:0}.signal{border-top:1px solid var(--line);padding:22px 0;display:grid;grid-template-columns:42px 1fr;gap:18px}.signal:last-child{border-bottom:1px solid var(--line)}
+    .signal em{color:var(--cyan);font-style:normal}.signal h3{font-size:13px;letter-spacing:.08em;text-transform:uppercase;margin:0 0 8px}.signal p{color:var(--muted);font-size:12px;line-height:1.6;margin:0}.signal b{color:var(--ink)}
+    .constraint-stage{overflow:hidden;background:linear-gradient(90deg,rgba(255,107,95,.025),transparent 33%,rgba(96,241,209,.03))}
+    .boundary{display:grid;grid-template-columns:1fr auto 1fr;min-height:490px;border-top:1px solid var(--line);border-bottom:1px solid var(--line);margin-top:60px}
+    .zone{padding:46px clamp(15px,4vw,65px);position:relative}.zone h3{font-size:11px;text-transform:uppercase;letter-spacing:.19em;color:var(--muted);margin-bottom:38px}.zone ul{list-style:none;padding:0;margin:0}.zone li{font-family:Inter,Arial,sans-serif;font-size:clamp(18px,2.2vw,31px);margin:0 0 24px;color:#9cada9}.zone li b{color:var(--ink);font-weight:500}
+    .gate{width:92px;border-left:1px solid var(--amber);border-right:1px solid var(--amber);background:repeating-linear-gradient(135deg,rgba(255,184,77,.06) 0 8px,transparent 8px 16px);display:flex;align-items:center;justify-content:center;color:var(--amber);writing-mode:vertical-rl;font-size:10px;letter-spacing:.23em;text-transform:uppercase}.gate:before{content:"";position:absolute;width:16px;height:16px;border:1px solid var(--amber);background:var(--paper);transform:rotate(45deg);box-shadow:0 0 20px rgba(255,184,77,.35)}
+    .danger{color:var(--red)!important}.protocol{color:var(--cyan)!important}
+    .boundary-note{font-size:11px;line-height:1.7;color:var(--muted);max-width:680px;margin-top:25px}.boundary-note span{color:var(--amber)}
+    .backcast{background:linear-gradient(180deg,var(--paper),#0b1514 55%,var(--paper))}
+    .timeline{position:relative;margin-top:80px;padding:20px 0 60px}.timeline:before{content:"";position:absolute;left:50%;top:0;bottom:0;width:1px;background:linear-gradient(transparent,var(--cyan) 15% 85%,transparent)}
+    .future{margin:0 auto 80px;width:190px;height:190px;border:1px solid var(--cyan);border-radius:50%;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;box-shadow:0 0 70px rgba(96,241,209,.08),inset 0 0 40px rgba(96,241,209,.05);position:relative;background:var(--paper2)}
+    .future:after{content:"";position:absolute;inset:12px;border:1px dashed rgba(96,241,209,.4);border-radius:50%;animation:turn 18s linear infinite}.future b{font-family:Inter,Arial,sans-serif;font-size:21px;max-width:130px}.future span{font-size:9px;letter-spacing:.15em;color:var(--cyan);margin-top:9px}
+    .step{width:calc(50% - 46px);position:relative;margin-bottom:58px;padding:0 34px 24px;border-bottom:1px solid var(--line)}.step:nth-of-type(odd){margin-left:auto}.step:nth-of-type(even){text-align:right}.step:before{content:attr(data-n);position:absolute;top:0;width:28px;height:28px;border-radius:50%;border:1px solid var(--cyan);background:var(--paper);color:var(--cyan);display:grid;place-items:center;font-size:10px}.step:nth-of-type(odd):before{left:-60px}.step:nth-of-type(even):before{right:-60px}.step h3{font-family:Inter,Arial,sans-serif;font-size:clamp(20px,2.5vw,32px);margin-bottom:10px}.step p{color:var(--muted);line-height:1.6;font-size:12px;margin:0}.step code{color:var(--cyan);font-family:inherit}
+    .failure{background:#090d0d}
+    .recorder{border:1px solid rgba(255,107,95,.35);background:rgba(19,12,12,.35);margin-top:55px;position:relative}.recorder-head{display:flex;justify-content:space-between;gap:15px;padding:14px 18px;border-bottom:1px solid rgba(255,107,95,.25);font-size:9px;text-transform:uppercase;letter-spacing:.18em;color:#c68b86}.recorder-head i{display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--red);box-shadow:0 0 10px var(--red);margin-right:8px}.event{display:grid;grid-template-columns:100px 1fr minmax(170px,26%);gap:24px;padding:25px 20px;border-bottom:1px solid rgba(255,255,255,.06);align-items:start;transition:.25s}.event:hover{background:rgba(255,107,95,.04)}.event:last-child{border-bottom:0}.event time{color:#6b7b78;font-size:10px}.event h3{font-size:13px;margin:0 0 7px;color:var(--ink)}.event p{font-size:11px;line-height:1.6;color:var(--muted);margin:0}.status{justify-self:end;font-size:9px;line-height:1.5;text-transform:uppercase;letter-spacing:.12em;color:var(--red);border:1px solid rgba(255,107,95,.4);padding:8px 10px}.status.amber{color:var(--amber);border-color:rgba(255,184,77,.4)}
+    .rollback{display:flex;align-items:center;gap:14px;margin-top:28px;color:var(--muted);font-size:10px}.rollback .line{height:3px;flex:1;background:linear-gradient(90deg,var(--cyan) 0 20%,var(--amber) 20% 80%,rgba(255,255,255,.1) 80%);position:relative}.rollback .line:after{content:"5 prompts";position:absolute;left:50%;top:10px;color:var(--amber)}
+    .synthesis{min-height:120svh;display:grid;align-content:center;overflow:hidden;background:radial-gradient(circle at 50% 50%,rgba(96,241,209,.09),transparent 34%),#07100e}
+    .synthesis .section-id{justify-content:center}.synthesis h2{text-align:center;max-width:1100px;margin-left:auto;margin-right:auto}.core{position:relative;width:min(90vw,860px);aspect-ratio:1;margin:55px auto 0;display:grid;place-items:center}
+    .ring{position:absolute;border:1px solid rgba(96,241,209,.27);border-radius:50%;animation:turn 40s linear infinite}.r1{inset:0;border-style:dashed}.r2{inset:13%;animation-direction:reverse;animation-duration:32s}.r3{inset:28%;border-color:rgba(255,184,77,.35);animation-duration:24s}.ring:before{content:"";position:absolute;width:9px;height:9px;border-radius:50%;background:var(--cyan);top:12%;left:18%;box-shadow:0 0 20px var(--cyan)}.r3:before{background:var(--amber);box-shadow:0 0 20px var(--amber)}
+    .core-center{position:relative;z-index:2;width:38%;aspect-ratio:1;border-radius:50%;background:#0c1d19;border:1px solid var(--cyan);display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;box-shadow:0 0 90px rgba(96,241,209,.16),inset 0 0 55px rgba(96,241,209,.07);padding:25px}.core-center small{color:var(--cyan);font-size:8px;letter-spacing:.2em;text-transform:uppercase}.core-center b{font-family:Inter,Arial,sans-serif;font-size:clamp(17px,2.2vw,29px);line-height:1.1;margin-top:12px}.node{position:absolute;background:var(--paper);border:1px solid var(--line);padding:10px 14px;font-size:9px;letter-spacing:.09em;text-transform:uppercase;color:#a6b8b4;z-index:3}.n1{top:4%;left:41%}.n2{right:2%;top:43%}.n3{bottom:5%;left:41%}.n4{left:0;top:43%}.n5{right:15%;top:17%;color:var(--amber);border-color:rgba(255,184,77,.35)}.n6{left:12%;bottom:18%;color:var(--red);border-color:rgba(255,107,95,.35)}
+    .verdict{text-align:center;max-width:760px;margin:50px auto 0;font-family:Inter,Arial,sans-serif;font-size:clamp(17px,2vw,25px);line-height:1.55;color:#a8bab6}.verdict strong{color:var(--ink);font-weight:500}
+    footer{padding:25px clamp(24px,8vw,130px) 45px;display:flex;justify-content:space-between;color:var(--muted);font-size:9px;text-transform:uppercase;letter-spacing:.14em;border-top:1px solid var(--line)}
+    .reveal{opacity:0;transform:translateY(24px);transition:opacity .8s ease,transform .8s ease}.reveal.in{opacity:1;transform:none}
+    @keyframes turn{to{transform:rotate(360deg)}}@keyframes pulse{50%{opacity:.3;box-shadow:0 0 3px var(--cyan)}}@keyframes drop{0%{transform:scaleY(0);transform-origin:top}50%{transform:scaleY(1);transform-origin:top}51%{transform-origin:bottom}100%{transform:scaleY(0);transform-origin:bottom}} 
+    @media(max-width:760px){.rail{display:none}.topline span:last-child{display:none}.hero{min-height:620px}h1{font-size:clamp(55px,19vw,90px)}h1 span{transform:translateX(8vw)}.orbit{width:110vw;right:-65%;top:20%}.radar-layout{grid-template-columns:1fr}.radar{width:min(86vw,470px)}.boundary{grid-template-columns:1fr}.gate{height:70px;width:100%;writing-mode:horizontal-tb;border-left:0;border-right:0;border-top:1px solid var(--amber);border-bottom:1px solid var(--amber)}.gate:before{display:none}.timeline:before{left:14px}.future{margin-left:0;width:150px;height:150px}.step,.step:nth-of-type(even){width:calc(100% - 43px);margin-left:43px;text-align:left;padding-left:18px}.step:nth-of-type(odd):before,.step:nth-of-type(even):before{left:-43px;right:auto}.event{grid-template-columns:65px 1fr}.status{grid-column:2;justify-self:start}.node{font-size:7px;padding:7px}.core{width:100vw;margin-left:calc(-1 * clamp(24px,8vw,130px))}.core-center{width:46%}.n2{right:3%}.n4{left:3%}footer{gap:20px;flex-direction:column}}
+    @media(prefers-reduced-motion:reduce){html{scroll-behavior:auto}.orbit,.sweep,.ring,.future:after,.live:before,.scroll-cue:after{animation:none}.reveal{opacity:1;transform:none;transition:none}}
+  </style>
+</head>
+<body>
+  <div class="progress" aria-hidden="true"></div>
+  <nav class="rail" aria-label="Session sections"><a href="#origin" aria-label="Origin"></a><a href="#questions" aria-label="Question Storming"></a><a href="#constraints" aria-label="Constraint Mapping"></a><a href="#backcast" aria-label="Backcasting"></a><a href="#failure" aria-label="Failure Analysis"></a><a href="#synthesis" aria-label="Synthesis"></a></nav>
+
+  <section class="hero" id="origin" data-section>
+    <div class="topline"><span class="live">Field record / complete</span><span>14 July 2026 · Production architecture session</span></div>
+    <div class="orbit" aria-hidden="true"><i></i></div>
+    <div class="hero-copy">
+      <div class="kicker">thcode / foundation study 01</div>
+      <h1>TRUST<span>THE CALL.</span></h1>
+      <p class="hero-deck">A brainstorm about turning a blank architectural slate into a production system where <b>every extension, action, failure, and recovery is legible.</b></p>
+    </div>
+    <div class="scroll-cue">Trace the reasoning</div>
+  </section>
+
+  <section id="questions" data-section>
+    <div class="section-id reveal">01 / Question Storming</div>
+    <h2 class="reveal">Trust begins before execution.</h2>
+    <div class="question reveal">What must the project structure answer before it can be trusted in production?</div>
+    <div class="radar-layout">
+      <div class="radar reveal" aria-label="Production trust radar"><div class="sweep"></div><i class="blip b1" data-l="model compatibility"></i><i class="blip b2" data-l="safe transfer"></i><i class="blip b3" data-l="failure evidence"></i><i class="blip b4" data-l="round performance"></i></div>
+      <div class="signal-list reveal">
+        <article class="signal"><em>↗</em><div><h3>Approval has two depths</h3><p>Lead with a plain-language purpose. Expand to exact arguments, destination, selected data and side effects. For local execution, <b>show the exact command.</b></p></div></article>
+        <article class="signal"><em>⇄</em><div><h3>Remote calls remain inspectable</h3><p>Preview method, verified endpoint, service and safe payload summary. <b>Credentials never enter the display.</b></p></div></article>
+        <article class="signal"><em>!</em><div><h3>Evidence before explanation</h3><p>The harness classifies network failure; the model explains it. Users may inspect the deterministic category and sanitized raw evidence.</p></div></article>
+        <article class="signal"><em>◷</em><div><h3>One round, one clock</h3><p>Total end-to-end prompt duration is the user-facing unit. Subsystem timings and token distinctions stay available to developers.</p></div></article>
+      </div>
+    </div>
+  </section>
+
+  <section class="constraint-stage" id="constraints" data-section>
+    <div class="section-id reveal">02 / Constraint Mapping</div>
+    <h2 class="reveal">Own the harness.<br>Bound the blast radius.</h2>
+    <p class="lead reveal">thcode cannot guarantee an upstream model’s judgment. It can guarantee a <strong>polished TUI, reliable execution, visible risk, and persistent boundaries.</strong></p>
+    <div class="boundary reveal">
+      <div class="zone"><h3>Variable / upstream</h3><ul><li>Model <b>reasoning quality</b></li><li>AI for Thai <b>availability</b></li><li>SCB X / Typhoon <b>credentials</b></li><li>Provider <b>output behavior</b></li></ul></div>
+      <div class="gate">declared permission boundary</div>
+      <div class="zone"><h3>Owned / deterministic</h3><ul><li class="protocol">Structured tool-call harness</li><li>Generic extension rendering</li><li class="danger">Hard refusal: host OS</li><li>Danger labels + approval</li><li>Saved boundary expansions</li></ul></div>
+    </div>
+    <p class="boundary-note reveal"><span>Full Access ≠ no boundary.</span> Workspace, command, network, service and quota scopes remain declared; sensitive transfer is still a separate override.</p>
+  </section>
+
+  <section class="backcast" id="backcast" data-section>
+    <div class="section-id reveal">03 / Backcasting</div>
+    <h2 class="reveal">Start from “connected.”<br>Walk backward to the contract.</h2>
+    <p class="lead reveal">The future state is an extension ecosystem that grows without rewriting the UI—or its neighbors.</p>
+    <div class="timeline">
+      <div class="future reveal"><b>Available to use</b><span>HEALTHY / DISCOVERED</span></div>
+      <article class="step reveal" data-n="04"><h3>Live health check</h3><p>A configured model appears only after its API responds. Availability proves connectivity—not tool-call compatibility.</p></article>
+      <article class="step reveal" data-n="03"><h3>Generic discovery</h3><p>The TUI renders registered metadata through reusable components. New providers and services require <code>zero extension-specific UI</code>.</p></article>
+      <article class="step reveal" data-n="02"><h3>Named protocol profiles</h3><p>OpenAI-compatible and Anthropic for reasoning; declarative HTTP mappings for specialist services; reviewed adapters where protocols do not fit.</p></article>
+      <article class="step reveal" data-n="01"><h3>Configuration without code</h3><p>After installation, users may add Ollama, vLLM, private OCR or speech endpoints. Configuration maps fields and endpoints; it cannot execute custom adapter code.</p></article>
+      <article class="step reveal" data-n="00"><h3>Reviewed product surface</h3><p>Slash commands remain TypeScript shipped by thcode developers. Extension freedom stops short of arbitrary executable code.</p></article>
+    </div>
+  </section>
+
+  <section class="failure" id="failure" data-section>
+    <div class="section-id reveal">04 / Failure Analysis</div>
+    <h2 class="reveal">Do not guess after the signal breaks.</h2>
+    <p class="lead reveal">A production foundation earns trust by preserving uncertainty, making broken states explicit, and reversing only what it can prove.</p>
+    <div class="recorder reveal">
+      <div class="recorder-head"><span><i></i> incident recorder / prompt 184</span><span>append-only truth</span></div>
+      <div class="event"><time>16:43:08.110</time><div><h3>PROTOCOL_FAILURE</h3><p>The endpoint passed health check, then violated its selected protocol during use. Report the specific error; do not reinterpret or silently repair it.</p></div><span class="status">provider unhealthy<br>explicit retest required</span></div>
+      <div class="event"><time>16:43:11.624</time><div><h3>REMOTE_OUTCOME_UNKNOWN</h3><p>A crash occurred after dispatch. Never retry automatically: the remote side may already have acted.</p></div><span class="status amber">user must reprompt</span></div>
+      <div class="event"><time>16:43:12.003</time><div><h3>CHAT_INTERRUPTED</h3><p>Restore every model response already received. Append an interruption marker exactly where execution stopped—never invent the missing ending.</p></div><span class="status amber">history preserved</span></div>
+      <div class="event"><time>16:44:29.880</time><div><h3>ROLLBACK_CONFLICT</h3><p>Reverse exact agent patches only when before hashes and current hunks match. Later overlapping edits stop automatic rollback for manual resolution.</p></div><span class="status">refused safely</span></div>
+    </div>
+    <div class="rollback reveal"><span>prompt −5</span><div class="line"></div><span>now</span></div>
+    <p class="boundary-note reveal">Binary originals are retained temporarily. Checkpoints live for <span>five subsequent prompts by default</span>, then expire; retention is configurable.</p>
+  </section>
+
+  <section class="synthesis" id="synthesis" data-section>
+    <div class="section-id reveal">05 / Convergence</div>
+    <h2 class="reveal">Connectivity is the core.<br>Trust is the system around it.</h2>
+    <div class="core reveal" aria-label="Production architecture synthesis">
+      <div class="ring r1"></div><div class="ring r2"></div><div class="ring r3"></div>
+      <span class="node n1">generic UI discovery</span><span class="node n2">health state</span><span class="node n3">error evidence</span><span class="node n4">declarative config</span><span class="node n5">approval previews</span><span class="node n6">rollback + recovery</span>
+      <div class="core-center"><small>production foundation</small><b>Provider + specialist-service platform</b></div>
+    </div>
+    <p class="verdict reveal"><strong>No usable connectivity, no functional agentic CLI.</strong> Protocol profiles, configuration, discovery, health and unhealthy-state handling form one extension lifecycle. Safety, observability, recovery and the TUI make that lifecycle worthy of trust.</p>
+  </section>
+
+  <footer><span>thcode / brainstorming artifact</span><span>Foundation established · 2026-07-14</span></footer>
+  <script>
+    const sections=[...document.querySelectorAll('[data-section]')], dots=[...document.querySelectorAll('.rail a')], reveals=[...document.querySelectorAll('.reveal')], progress=document.querySelector('.progress');
+    const io=new IntersectionObserver(es=>es.forEach(e=>{if(e.isIntersecting)e.target.classList.add('in')}),{threshold:.12});reveals.forEach(x=>io.observe(x));
+    const mark=()=>{const y=scrollY+innerHeight*.48;let active=0;sections.forEach((s,i)=>{if(y>=s.offsetTop)active=i});dots.forEach((d,i)=>d.classList.toggle('on',i===active));const max=document.documentElement.scrollHeight-innerHeight;progress.style.width=(max?scrollY/max*100:0)+'%'};
+    addEventListener('scroll',mark,{passive:true});mark();
+    if(matchMedia('(pointer:fine)').matches)addEventListener('pointermove',e=>{document.body.style.setProperty('--mx',e.clientX+'px');document.body.style.setProperty('--my',(e.clientY+scrollY)+'px')},{passive:true});
+  </script>
+</body>
+</html>

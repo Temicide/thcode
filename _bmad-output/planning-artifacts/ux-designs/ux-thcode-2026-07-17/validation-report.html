@@ -1,0 +1,266 @@
+<!DOCTYPE html>
+<!--
+  UX Design Validation Report — skeleton template.
+
+  This file is a starter the synthesis pass fills in directly. There is no
+  substitution engine. The LLM:
+    1. Reads {doc_workspace}/review-rubric.md and every review-{slug}.md from
+       additional reviewers.
+    2. Copies this skeleton.
+    3. Replaces the placeholder content (everything between TEMPLATE markers)
+       with the consolidated review, preserving the structure and CSS.
+    4. Writes the result to {doc_workspace}/validation-report.html.
+    5. Writes a markdown twin to {doc_workspace}/validation-report.md.
+
+  Visual rules the LLM must preserve:
+    - The container width, the color tokens, the typography.
+    - One dimension = one collapsible <section class="dimension">.
+    - Verdict pill uses the verdict-* class matching its judgment.
+    - Severity badge uses the badge-sev-* class matching its level.
+    - Each extra reviewer (accessibility, adversarial, etc.) gets its own
+      collapsible section below the rubric dimensions.
+    - The footer always shows the artifact paths and timestamp.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>UX Design Validation: thcode</title>
+<style>
+  :root {
+    --bg: #fafaf9;
+    --surface: #ffffff;
+    --border: #e7e5e4;
+    --text: #1c1917;
+    --muted: #78716c;
+
+    --verdict-strong: #16a34a;
+    --verdict-adequate: #65a30d;
+    --verdict-thin: #d97706;
+    --verdict-broken: #dc2626;
+
+    --sev-low: #64748b;
+    --sev-medium: #ca8a04;
+    --sev-high: #ea580c;
+    --sev-critical: #dc2626;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, system-ui, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    line-height: 1.6;
+    font-size: 15px;
+  }
+  .container { max-width: 960px; margin: 0 auto; padding: 32px 24px 64px; }
+
+  header.report-header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 24px;
+    padding-bottom: 16px;
+    border-bottom: 1px solid var(--border);
+    margin-bottom: 24px;
+  }
+  .title h1 { margin: 0; font-size: 22px; font-weight: 600; letter-spacing: -0.01em; }
+  .title .subtitle { color: var(--muted); font-size: 13px; margin-top: 4px; font-family: ui-monospace, "SF Mono", Menlo, monospace; }
+
+  .synthesis {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-left: 3px solid var(--muted);
+    border-radius: 8px;
+    padding: 18px 22px;
+    margin-bottom: 24px;
+    font-size: 15.5px;
+  }
+  .synthesis p { margin: 0 0 10px; }
+  .synthesis p:last-child { margin-bottom: 0; }
+
+  .dimension-summary {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    gap: 10px;
+    margin-bottom: 24px;
+  }
+  .dim-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 12px 14px;
+  }
+  .dim-card .dim-name { font-size: 13px; color: var(--muted); margin-bottom: 6px; }
+  .dim-card .dim-verdict { font-size: 14px; font-weight: 600; }
+
+  section.dimension, section.reviewer-section { margin-bottom: 14px; }
+  section.dimension details, section.reviewer-section details {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    overflow: hidden;
+  }
+  section summary {
+    padding: 14px 20px;
+    cursor: pointer;
+    user-select: none;
+    list-style: none;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+  section summary::-webkit-details-marker { display: none; }
+  section summary::before {
+    content: "▸";
+    display: inline-block;
+    color: var(--muted);
+    transition: transform 0.15s ease;
+  }
+  section details[open] summary::before { transform: rotate(90deg); }
+  section summary h2 {
+    display: inline;
+    margin: 0;
+    font-size: 16px;
+    font-weight: 600;
+    letter-spacing: -0.005em;
+    flex: 1;
+  }
+  .verdict-pill {
+    font-size: 11px;
+    padding: 3px 10px;
+    border-radius: 999px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: white;
+  }
+  .verdict-strong { background: var(--verdict-strong); }
+  .verdict-adequate { background: var(--verdict-adequate); }
+  .verdict-thin { background: var(--verdict-thin); }
+  .verdict-broken { background: var(--verdict-broken); }
+
+  .dim-body { padding: 4px 20px 18px; }
+  .dim-judgment { color: var(--text); font-size: 14.5px; }
+  .dim-judgment p { margin: 0 0 10px; }
+
+  .findings-list { padding: 0 20px 4px; }
+  article.finding {
+    padding: 14px 0;
+    border-top: 1px solid var(--border);
+  }
+  article.finding:first-child { border-top: none; }
+  article.finding header {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+    margin-bottom: 6px;
+  }
+  .badge {
+    font-size: 10.5px;
+    padding: 3px 8px;
+    border-radius: 4px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    line-height: 1.4;
+  }
+  .badge-sev-low { background: rgba(100, 116, 139, 0.12); color: var(--sev-low); }
+  .badge-sev-medium { background: rgba(202, 138, 4, 0.14); color: var(--sev-medium); }
+  .badge-sev-high { background: rgba(234, 88, 12, 0.14); color: var(--sev-high); }
+  .badge-sev-critical { background: rgba(220, 38, 38, 0.14); color: var(--sev-critical); }
+  .finding-title { margin: 0; font-size: 15px; font-weight: 500; flex: 1; min-width: 200px; }
+  .finding-location { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 12.5px; color: var(--muted); }
+  .finding-note, .finding-fix { margin-top: 6px; font-size: 14px; }
+  .finding-fix strong { color: var(--muted); font-weight: 500; }
+
+  .reviewer-source {
+    font-size: 12px;
+    color: var(--muted);
+    font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  }
+
+  .mechanical {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 16px 20px;
+    margin-top: 24px;
+    font-size: 14px;
+  }
+  .mechanical h3 { margin: 0 0 10px; font-size: 14px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; }
+  .mechanical ul { margin: 0; padding-left: 20px; }
+  .mechanical li { margin-bottom: 4px; color: var(--text); }
+
+  footer.report-footer {
+    margin-top: 40px;
+    padding-top: 16px;
+    border-top: 1px solid var(--border);
+    font-size: 12px;
+    color: var(--muted);
+    font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  }
+  footer .meta { display: flex; gap: 24px; flex-wrap: wrap; }
+</style>
+</head>
+<body>
+  <div class="container">
+
+    <!-- TEMPLATE: header. Fill ux spec name and ux spec path. No overall grade —
+         per-category verdicts and severity counts below carry the picture. -->
+    <header class="report-header">
+      <div class="title">
+        <h1>thcode — UX Design Validation Report</h1>
+        <div class="subtitle">/Users/temicide/Documents/thcode/_bmad-output/planning-artifacts/ux-designs/ux-thcode-2026-07-17/DESIGN.md</div>
+      </div>
+    </header>
+
+    <!-- TEMPLATE: overall synthesis paragraphs. Lift directly from
+         review-rubric.md "Overall verdict" section; expand if extra reviewers
+         (accessibility, adversarial, etc.) materially shift the picture.
+         Wrap each paragraph in <p>. -->
+    <div class="synthesis"><p>The pair is a strong, source-grounded downstream contract for the primary terminal journeys, authority model, visual tokens, component behavior, and platform posture. It is not yet a clean release handoff: several source journeys are only embedded in other flows, state coverage is asserted generically rather than closed per IA surface, and cross-spine naming/traceability needs normalization. No critical token-definition or visual-reference failure was found.</p><p>Extra reviewers materially shift the picture: accessibility, terminal usability, and control/trust reviews expose four deduplicated critical release blockers and a broad set of high-severity interaction, authority, output-parity, and recovery gaps. The design direction is coherent, but the implementation contract is not ready for release-grade accessibility, near-clone terminal interaction, or human-control guarantees.</p></div>
+
+    <!-- TEMPLATE: dimension summary cards. One per rubric category, in this
+         canonical order (from references/validate.md):
+           1. Flow coverage
+           2. Token completeness
+           3. Component coverage
+           4. State coverage
+           5. Visual reference coverage
+           6. Bloat & overspecification
+           7. Inheritance discipline
+           8. Shape fit
+         The dim-verdict text uses one of: strong | adequate | thin | broken. -->
+    <div class="dimension-summary"><div class="dim-card"><div class="dim-name">Flow coverage</div><div class="dim-verdict" style="color: var(--verdict-adequate)">adequate</div></div><div class="dim-card"><div class="dim-name">Token completeness</div><div class="dim-verdict" style="color: var(--verdict-adequate)">adequate</div></div><div class="dim-card"><div class="dim-name">Component coverage</div><div class="dim-verdict" style="color: var(--verdict-adequate)">adequate</div></div><div class="dim-card"><div class="dim-name">State coverage</div><div class="dim-verdict" style="color: var(--verdict-thin)">thin</div></div><div class="dim-card"><div class="dim-name">Visual reference coverage</div><div class="dim-verdict" style="color: var(--verdict-strong)">strong</div></div><div class="dim-card"><div class="dim-name">Bloat &amp; overspecification</div><div class="dim-verdict" style="color: var(--verdict-thin)">thin</div></div><div class="dim-card"><div class="dim-name">Inheritance discipline</div><div class="dim-verdict" style="color: var(--verdict-adequate)">adequate</div></div><div class="dim-card"><div class="dim-name">Shape fit</div><div class="dim-verdict" style="color: var(--verdict-strong)">strong</div></div></div>
+
+    <!-- TEMPLATE: one section per rubric category, same canonical order as the
+         summary cards above. Skip a category entirely if the rubric review
+         marked it n/a for this UX spec. Open the section by default if verdict
+         is thin or broken. -->
+<section class="dimension"><details><summary><h2>Flow coverage</h2><span class="verdict-pill verdict-adequate">adequate</span></summary><div class="dim-body"><div class="dim-judgment"><p>Five named flows cover UJ-1, UJ-4, UJ-5, and UJ-7, but catalog, specialist-recovery, and interrupted-remote journeys are not independently auditable.</p></div></div><div class="findings-list"><article class="finding"><header><span class="badge badge-sev-high">high</span><h3 class="finding-title">Missing dedicated source journeys</h3><span class="finding-location">EXPERIENCE.md §§Key Flows, lines 191–252; `.working/source-extract-prd.md` UJ-2/UJ-3/UJ-6</span></header><div class="finding-note"><strong>R1.</strong> Catalog exploration, unhealthy-specialist recovery, and interrupted remote request are omitted or nested, so their climax and failure path require inference.</div><div class="finding-fix"><strong>Fix:</strong> Add a Key Flow per omitted UJ or an explicit auditable source-to-flow mapping.</div><div class="reviewer-source">Sources: review-rubric.md</div></article></div></details></section>
+<section class="dimension"><details><summary><h2>Token completeness</h2><span class="verdict-pill verdict-adequate">adequate</span></summary><div class="dim-body"><div class="dim-judgment"><p>Tokens resolve, but load-bearing contrast and focus acceptance criteria remain qualitative.</p></div></div><div class="findings-list"><article class="finding"><header><span class="badge badge-sev-high">high</span><h3 class="finding-title">Contrast and focus visibility lack measurable criteria</h3><span class="finding-location">DESIGN.md §§Colors and Do’s and Don’ts, lines 149–160,211–223; EXPERIENCE.md 182–184</span></header><div class="finding-note"><strong>R2.</strong> Theme remapping or monochrome output can hide Full Access, danger, unknown outcome, or focus despite nominal labels.</div><div class="finding-fix"><strong>Fix:</strong> Define terminal contrast/focus targets and canonical no-color labels; test truecolor, 256/16-color, monochrome, inverted, and invisible-color modes.</div><div class="reviewer-source">Sources: review-rubric.md; accessibility A20</div></article></div></details></section>
+<section class="dimension"><details><summary><h2>Component coverage</h2><span class="verdict-pill verdict-adequate">adequate</span></summary><div class="dim-body"><div class="dim-judgment"><p>All 14 named components have visual and behavioral rows, but identifiers are not normalized.</p></div></div><div class="findings-list"><article class="finding"><header><span class="badge badge-sev-medium">medium</span><h3 class="finding-title">Component identifiers drift between spines</h3><span class="finding-location">DESIGN.md 196–209; EXPERIENCE.md 69–84</span></header><div class="finding-note"><strong>R3.</strong> `Status bar`/`status-bar` and similar variants prevent mechanical joins and downstream traceability.</div><div class="finding-fix"><strong>Fix:</strong> Choose canonical identifiers for frontmatter, prose, tables, and references; separate human labels.</div><div class="reviewer-source">Sources: review-rubric.md</div></article><article class="finding"><header><span class="badge badge-sev-high">high</span><h3 class="finding-title">Composer editing is not a usable state machine</h3><span class="finding-location">DESIGN.md 196–199; EXPERIENCE.md 69–75,163–176</span></header><div class="finding-note"><strong>F7.</strong> IME cancellation, multiline paste, editing during streaming, Esc, history, and submit can behave differently by implementation guess.</div><div class="finding-fix"><strong>Fix:</strong> Specify composing/editing/completion/streaming/interrupted/overlay-blocked states and key precedence.</div><div class="reviewer-source">Sources: terminal H-03; accessibility A16,A24</div></article><article class="finding"><header><span class="badge badge-sev-high">high</span><h3 class="finding-title">Thai IME, grapheme, and cell-width editing lacks an implementable model</h3><span class="finding-location">EXPERIENCE.md 73,185; DESIGN.md 198; PRD 217–220</span></header><div class="finding-note"><strong>F11.</strong> Code-unit cursoring can split Thai/emoji clusters, submit preedit text, and disagree with terminal-cell wrapping.</div><div class="finding-fix"><strong>Fix:</strong> Specify preedit/committed text, no submit during composition, grapheme segmentation, cell widths, normalization, and Windows/macOS fixtures.</div><div class="reviewer-source">Sources: accessibility A16</div></article><article class="finding"><header><span class="badge badge-sev-high">high</span><h3 class="finding-title">Mixed Thai-English technical tokens lack wrapping/copy rules</h3><span class="finding-location">DESIGN.md 164–172,180; EXPERIENCE.md 50,184–187</span></header><div class="finding-note"><strong>F12.</strong> Paths, URLs, hashes, and commands can split or merge with Thai prose; copied output can differ from original bytes.</div><div class="finding-fix"><strong>Fix:</strong> Use atomic technical spans or explicit expanded views; never alter copy bytes; verify widths and clipboard/export.</div><div class="reviewer-source">Sources: accessibility A17</div></article><article class="finding"><header><span class="badge badge-sev-medium">medium</span><h3 class="finding-title">Completion and selection feedback lack nonvisual contracts</h3><span class="finding-location">EXPERIENCE.md 34,82,167; DESIGN.md 207</span></header><div class="finding-note"><strong>F26.</strong> Color-limited or screen-reader users cannot tell selected item, count, loading/error state, or acceptance; async ranking can move selection.</div><div class="finding-fix"><strong>Fix:</strong> Use “selected, 2 of 5”, stable identity, state announcements, acceptance confirmation, and freeze/reconcile during key handling.</div><div class="reviewer-source">Sources: accessibility A25</div></article><article class="finding"><header><span class="badge badge-sev-medium">medium</span><h3 class="finding-title">Credential secrecy does not cover accessibility and diagnostics</h3><span class="finding-location">EXPERIENCE.md 83,186; DESIGN.md 208; PRD 233–243</span></header><div class="finding-note"><strong>F27.</strong> Paste, resize, preedit, labels, snapshots, scrollback, and exceptions can expose a secret despite masking.</div><div class="finding-fix"><strong>Fix:</strong> Never expose secret values in UI, accessibility, logs, snapshots, errors, clipboard, scrollback, or headless output; clear buffers and test.</div><div class="reviewer-source">Sources: accessibility A26</div></article></div></details></section>
+<section class="dimension"><details open><summary><h2>State coverage</h2><span class="verdict-pill verdict-thin">thin</span></summary><div class="dim-body"><div class="dim-judgment"><p>The vocabulary is strong, but generic state assertions do not close behavior for every IA surface.</p></div></div><div class="findings-list"><article class="finding"><header><span class="badge badge-sev-high">high</span><h3 class="finding-title">IA surfaces lack per-state closure</h3><span class="finding-location">EXPERIENCE.md 26–46,86–102</span></header><div class="finding-note"><strong>R4.</strong> Startup, onboarding, `/models`, `/check`, `/usage`, `/context`, and recovery lack explicit applicable loading/empty/error/denied/unknown/narrow behavior, action, and next step.</div><div class="finding-fix"><strong>Fix:</strong> Add a surface-by-state matrix with stable copy, action, and next step.</div><div class="reviewer-source">Sources: review-rubric.md</div></article><article class="finding"><header><span class="badge badge-sev-critical">critical</span><h3 class="finding-title">Keyboard focus and traversal are not a contract</h3><span class="finding-location">EXPERIENCE.md 24,100,176; DESIGN.md 178</span></header><div class="finding-note"><strong>F1.</strong> Completion, composer, and approval reuse keys without focus order, trap, return target, or nested-overlay rules; a user can approve the wrong control or become trapped.</div><div class="finding-fix"><strong>Fix:</strong> Define a keyboard matrix, entry/return focus, tab/arrow semantics, disabled behavior, escape precedence, and fixtures through composer → completion → approval → Evidence.</div><div class="reviewer-source">Sources: accessibility A11; terminal H-02/H-03/H-06; control 3,15</div></article><article class="finding"><header><span class="badge badge-sev-critical">critical</span><h3 class="finding-title">Approval safety and stale proposals are not keyboard-safe</h3><span class="finding-location">EXPERIENCE.md 69–84,115,163–176; DESIGN.md 200–202</span></header><div class="finding-note"><strong>F2.</strong> A changed digest, target, authority, or endpoint can leave an active Approve control; Enter may commit a stale proposal.</div><div class="finding-fix"><strong>Fix:</strong> Focus Cancel/Review initially, disable approval on mismatch, announce stale state, require fresh evaluation, and define Enter/Space.</div><div class="reviewer-source">Sources: accessibility A12; terminal H-06; control 3</div></article><article class="finding"><header><span class="badge badge-sev-critical">critical</span><h3 class="finding-title">Redirected approval, consent, and secret entry are unresolved</h3><span class="finding-location">EXPERIENCE.md 266–279; epics 361–362; PRD 276–279</span></header><div class="finding-note"><strong>F3.</strong> “Fail safely” omits TTY detection, refusal output, exit codes, pending behavior, and safe secret input; automation can misclassify a block.</div><div class="finding-fix"><strong>Fix:</strong> Specify stable stdout/stderr and machine-readable refusal, nonzero exits, redaction/no-secret guarantees, and a headless intent path; test every gate.</div><div class="reviewer-source">Sources: accessibility A13; terminal H-08; control 17</div></article><article class="finding"><header><span class="badge badge-sev-critical">critical</span><h3 class="finding-title">Sensitive-data transfer policy is unresolved</h3><span class="finding-location">EXPERIENCE.md 125–133; DESIGN.md 202–208; PRD 233–243,263–274</span></header><div class="finding-note"><strong>F4.</strong> Transfer consent lacks closed classification, uncertainty, retention/deletion, upstream handling, and cache policy for personal data.</div><div class="finding-fix"><strong>Fix:</strong> Close classification, transformation, retention, disclosure, consent, and fail-closed states across transfer/result/cache/Evidence/export/recovery.</div><div class="reviewer-source">Sources: control 1</div></article><article class="finding"><header><span class="badge badge-sev-high">high</span><h3 class="finding-title">Simultaneous warnings have no composition policy</h3><span class="finding-location">EXPERIENCE.md 72,104–115; DESIGN.md 194–205; epics 368–374</span></header><div class="finding-note"><strong>F5.</strong> Full Access, quarantine, overflow, unknown outcome, and rollback conflict can coexist but one row has no priority or minimum visible set.</div><div class="finding-fix"><strong>Fix:</strong> Define pinned fields, authority/severity order, alert slot, overflow notation, `/status` traversal, and 40/60/80/120-column layouts.</div><div class="reviewer-source">Sources: accessibility A19; terminal H-01; control 2</div></article><article class="finding"><header><span class="badge badge-sev-high">high</span><h3 class="finding-title">Streaming viewport and activity volume lack bounded behavior</h3><span class="finding-location">DESIGN.md 196–200; EXPERIENCE.md 69–77,117–123; epics 343–349</span></header><div class="finding-note"><strong>F8.</strong> Streaming and “every call” activity can push composer/interruption boundaries away or fill the terminal without grouping or inspection rules.</div><div class="finding-fix"><strong>Fix:</strong> Define auto-follow, scroll preservation, new-output/jump controls, grouping/counts, show-all, filtering, pagination, and durable copy.</div><div class="reviewer-source">Sources: terminal H-04,H-05</div></article><article class="finding"><header><span class="badge badge-sev-high">high</span><h3 class="finding-title">Screen-reader and linearized live-output semantics are deferred</h3><span class="finding-location">EXPERIENCE.md 178–189; DESIGN.md 196–209; architecture 78–84</span></header><div class="finding-note"><strong>F9.</strong> Ink redraw can duplicate streaming lines, hide status changes, or make transient deltas sound durable.</div><div class="finding-fix"><strong>Fix:</strong> Define a linearized event stream, announcement politeness, headings, EventId deduplication, interruption copy, and quiet/live mode.</div><div class="reviewer-source">Sources: accessibility A14</div></article><article class="finding"><header><span class="badge badge-sev-high">high</span><h3 class="finding-title">Focus can be lost during streaming, resize, cancellation, and races</h3><span class="finding-location">EXPERIENCE.md 73,100,149,176; DESIGN.md 178</span></header><div class="finding-note"><strong>F10.</strong> Rerender/remount during Thai composition or cancellation can lose cursor/IME and return focus to an unrelated control.</div><div class="finding-fix"><strong>Fix:</strong> Preserve stable identity and restore focus by logical control ID, including disappearance/disable/replacement rules.</div><div class="reviewer-source">Sources: accessibility A15</div></article><article class="finding"><header><span class="badge badge-sev-high">high</span><h3 class="finding-title">Narrow-terminal behavior has no minimum width or degradation order</h3><span class="finding-location">DESIGN.md 174–180,204–207; EXPERIENCE.md 178–189,266–279</span></header><div class="finding-note"><strong>F13.</strong> At 40–60 columns, status and approval content can wrap ambiguously, clip warnings, or push the composer away.</div><div class="finding-fix"><strong>Fix:</strong> Define width tiers, minimum width, priority, scrolling, text fallback, and 40/60/80/120 golden fixtures.</div><div class="reviewer-source">Sources: accessibility A18; terminal H-09</div></article><article class="finding"><header><span class="badge badge-sev-high">high</span><h3 class="finding-title">Motion and redraw lack reduced-motion and static rules</h3><span class="finding-location">DESIGN.md 182–190,196–209; EXPERIENCE.md 188</span></header><div class="finding-note"><strong>F14.</strong> Spinner/redraw can flicker, repeat announcements, or erase stable cancellation/unknown status.</div><div class="finding-fix"><strong>Fix:</strong> Make motion optional/nonsemantic; define static progress, budgets, no-blink, reduced-motion, and one-time transitions.</div><div class="reviewer-source">Sources: accessibility A21</div></article><article class="finding"><header><span class="badge badge-sev-high">high</span><h3 class="finding-title">Interruption boundaries and announcements are underspecified</h3><span class="finding-location">EXPERIENCE.md 96,149,188–189; DESIGN.md 199; architecture 24–32</span></header><div class="finding-note"><strong>F15.</strong> Partial remote output can leave users unsure whether work was not sent, possibly dispatched, or response-started.</div><div class="finding-fix"><strong>Fix:</strong> Define ordered chunks → one interruption heading → classification → Evidence → inspect/reprompt/reconcile, including replay races.</div><div class="reviewer-source">Sources: accessibility A22</div></article><article class="finding"><header><span class="badge badge-sev-high">high</span><h3 class="finding-title">Headless, redirected, and Ink output parity is asserted, not contracted</h3><span class="finding-location">EXPERIENCE.md 20,277; DESIGN.md 196; architecture 15–18</span></header><div class="finding-note"><strong>F16.</strong> Headless may reach the same state while omitting warnings, Evidence, redaction, or logical order.</div><div class="finding-fix"><strong>Fix:</strong> Define canonical text projection, labels, order, redaction, exit codes, IDs, and parity fixtures with replay deduplication.</div><div class="reviewer-source">Sources: accessibility A23; control 17</div></article><article class="finding"><header><span class="badge badge-sev-high">high</span><h3 class="finding-title">Recovery is a taxonomy, not a navigable experience</h3><span class="finding-location">EXPERIENCE.md 43–46,143–161; epics 256–262,360–364</span></header><div class="finding-note"><strong>F17.</strong> Unknown/recovery-locked states do not identify entry command, read-only limits, safe next action, or duplicate-effect risk.</div><div class="finding-fix"><strong>Fix:</strong> Define one recovery entry point and action matrix for inspect/reconcile/reprompt/retry-disabled/export/exit with commands and exit codes.</div><div class="reviewer-source">Sources: terminal H-07; control 10</div></article><article class="finding"><header><span class="badge badge-sev-high">high</span><h3 class="finding-title">Exact effect identity is not human-verifiable</h3><span class="finding-location">EXPERIENCE.md 69–84,104–115,125–133; architecture 43–55; epics 48–58,83–93</span></header><div class="finding-note"><strong>F18.</strong> Rewritten proposals, retries, or adapter changes can look like the approved readable action despite a different dispatched effect.</div><div class="finding-fix"><strong>Fix:</strong> Show short/expandable OperationId, action/payload/manifest/context digests, destination, generation, expiry; any change forces fresh review.</div><div class="reviewer-source">Sources: control 4,7,13</div></article><article class="finding"><header><span class="badge badge-sev-high">high</span><h3 class="finding-title">Persistent authority projection omits safety-critical scope</h3><span class="finding-location">DESIGN.md 196–208; EXPERIENCE.md 31–44,104–115; architecture 43–55</span></header><div class="finding-note"><strong>F19.</strong> Build + Full Access can hide Workspace, boundary scope/expiry, transfer consent, Runtime Activation, or enforcement state.</div><div class="finding-fix"><strong>Fix:</strong> Define a persistent authority summary and deterministic inspect action; safety-critical state cannot be merely immediately inspectable.</div><div class="reviewer-source">Sources: control 5</div></article><article class="finding"><header><span class="badge badge-sev-high">high</span><h3 class="finding-title">Full Access revocation has no lifecycle semantics</h3><span class="finding-location">DESIGN.md 221–222; EXPERIENCE.md 90–115; PRD 168–177</span></header><div class="finding-note"><strong>F20.</strong> Revocation during approval or a long-running operation does not define what is invalidated, cancelled, or already committed.</div><div class="finding-fix"><strong>Fix:</strong> Define grant/revoke scope, expiry, lifecycle effects, invalidation, and durable distinction between revocation, cancellation, and commit.</div><div class="reviewer-source">Sources: control 6</div></article><article class="finding"><header><span class="badge badge-sev-high">high</span><h3 class="finding-title">Specialist recipient and payload identity is incomplete</h3><span class="finding-location">EXPERIENCE.md 125–133,219–230; architecture 45–55; epics 83–93,173–183</span></header><div class="finding-note"><strong>F21.</strong> Service/host labels do not verify capability/version, adapter generation, transformations, call count, or exact bytes before transport.</div><div class="finding-fix"><strong>Fix:</strong> Show recipient/version, endpoint, method, generation, manifest, transformations, call count, expiry, and digests; fail closed on preflight mismatch.</div><div class="reviewer-source">Sources: control 7</div></article><article class="finding"><header><span class="badge badge-sev-high">high</span><h3 class="finding-title">Pause, interrupt, and cancel lack a two-phase contract</h3><span class="finding-location">EXPERIENCE.md 69–102,163–176; architecture 24–32; epics 264–276</span></header><div class="finding-note"><strong>F22.</strong> Esc/Ctrl+C during prepared, committed, or remote-started work gives no durable requested/acknowledged/still-running/committed state.</div><div class="finding-fix"><strong>Fix:</strong> Define cancellation states, acknowledgement timeout, cleanup evidence, durable operation row, and duplicate-attempt prohibition.</div><div class="reviewer-source">Sources: control 9; accessibility A24</div></article><article class="finding"><header><span class="badge badge-sev-high">high</span><h3 class="finding-title">Unknown remote outcomes lack reconciliation protocol</h3><span class="finding-location">EXPERIENCE.md 143–151,232–241; architecture 30–32,57–65</span></header><div class="finding-note"><strong>F23.</strong> Inspect/reprompt/reconcile is offered without idempotency, lookup/probe, evidence requirements, or terminal reconciled state.</div><div class="finding-fix"><strong>Fix:</strong> Define provider/service reconciliation; if impossible, retain unknown-outcome, prohibit equivalent reprompt, and explain residual risk.</div><div class="reviewer-source">Sources: control 10</div></article><article class="finding"><header><span class="badge badge-sev-high">high</span><h3 class="finding-title">Evidence completeness and authority are not surfaced</h3><span class="finding-location">DESIGN.md 199–209; EXPERIENCE.md 117–123; architecture 57–65</span></header><div class="finding-note"><strong>F24.</strong> Sanitized, stale, estimated, or missing output can appear as complete proof beside deterministic classification.</div><div class="finding-fix"><strong>Fix:</strong> Add completeness/provenance states, omission reasons, observation/display times, and keep model explanation separate.</div><div class="reviewer-source">Sources: control 11</div></article><article class="finding"><header><span class="badge badge-sev-high">high</span><h3 class="finding-title">Rollback conflicts lack executable safe resolution</h3><span class="finding-location">DESIGN.md 205–206; EXPERIENCE.md 153–161,243–252; addendum 41–50,131–140</span></header><div class="finding-note"><strong>F25.</strong> Changed files, renames, symlinks, or concurrent writers yield conflict without three-way inspection, safe skip/export/rebase, or durable resolution.</div><div class="finding-fix"><strong>Fix:</strong> Define digest/path identity, three-way comparison, rename/concurrency handling, explicit resolution, and no generic overwrite/continue.</div><div class="reviewer-source">Sources: control 12</div></article><article class="finding"><header><span class="badge badge-sev-medium">medium</span><h3 class="finding-title">Status and error vocabulary lack a canonical catalog</h3><span class="finding-location">EXPERIENCE.md 48–63,86–102; DESIGN.md 151–160; epics 321–324,363–365</span></header><div class="finding-note"><strong>F28.</strong> Visual, redirected, Evidence, completion, and Thai output can drift among configured/unhealthy/unavailable/unknown/blocked.</div><div class="finding-fix"><strong>Fix:</strong> Create versioned English/Thai-capable state/copy catalog with cause, retryability, recovery, exit, and narrow/noninteractive forms.</div><div class="reviewer-source">Sources: accessibility A27; terminal M-16</div></article><article class="finding"><header><span class="badge badge-sev-medium">medium</span><h3 class="finding-title">Long-output inspection is not keyboard- or reader-addressable</h3><span class="finding-location">EXPERIENCE.md 74,123–124,174; DESIGN.md 180; epics 274–275</span></header><div class="finding-note"><strong>F29.</strong> An unspecified visual affordance can hide lines from keyboard/linearized users with no count or truncation semantics.</div><div class="finding-fix"><strong>Fix:</strong> Define text commands/keys for expand, navigation, copy, counts, truncation, reading order, redaction, and redirected detail levels.</div><div class="reviewer-source">Sources: accessibility A28</div></article><article class="finding"><header><span class="badge badge-sev-medium">medium</span><h3 class="finding-title">Session navigation is named but not learnable</h3><span class="finding-location">EXPERIENCE.md 40–41,79–81,143–151; epics 101–109,341–352</span></header><div class="finding-note"><strong>F30.</strong> `/session` versus `/sessions`, duplicate names, missing Workspaces, and deletion-pending records lack canonical browser behavior.</div><div class="finding-fix"><strong>Fix:</strong> Choose one command plus alias; define columns, sort/search, movement, confirmation, duplicate names, restore progress, and missing Workspace handling.</div><div class="reviewer-source">Sources: terminal H-10</div></article><article class="finding"><header><span class="badge badge-sev-medium">medium</span><h3 class="finding-title">Context and usage controls measure state without guiding action</h3><span class="finding-location">DESIGN.md 203–205; EXPERIENCE.md 135–141; epics 113–126</span></header><div class="finding-note"><strong>F33.</strong> `82%` or unavailable percentage gives no contributors or direct remedy after protected overflow.</div><div class="finding-fix"><strong>Fix:</strong> Define ranked `/context` contributors and actions with consequences; keep `/usage` separate.</div><div class="reviewer-source">Sources: terminal M-13</div></article><article class="finding"><header><span class="badge badge-sev-medium">medium</span><h3 class="finding-title">Authority labels lack canonical compact wording</h3><span class="finding-location">DESIGN.md 196–207,215–222; EXPERIENCE.md 90–115; epics 46–59,321–323</span></header><div class="finding-note"><strong>F34.</strong> Narrow layouts may merge Full Access, transfer consent, Boundary Expansion, Workspace, and Work Mode into an ambiguous badge.</div><div class="finding-fix"><strong>Fix:</strong> Provide canonical narrow/expanded labels and separate visible authority fields.</div><div class="reviewer-source">Sources: terminal M-14</div></article><article class="finding"><header><span class="badge badge-sev-medium">medium</span><h3 class="finding-title">Credential onboarding lacks discovery and recovery</h3><span class="finding-location">EXPERIENCE.md 28–35,193–204; epics 214–220,455–510</span></header><div class="finding-note"><strong>F35.</strong> A failed live check or replace/remove request can trap users without help, evidence, exit, or safe diagnostics.</div><div class="finding-fix"><strong>Fix:</strong> Define onboarding help, inspect, retry, replace, remove, exit, and safe diagnostics; make offline limits explicit.</div><div class="reviewer-source">Sources: terminal M-15</div></article><article class="finding"><header><span class="badge badge-sev-medium">medium</span><h3 class="finding-title">Control-key precedence is undefined</h3><span class="finding-location">EXPERIENCE.md 163–176; epics 264–276</span></header><div class="finding-note"><strong>F36.</strong> Ctrl+C, Ctrl+D, and Esc can clear, cancel, terminate, dismiss, or orphan child work depending on lifecycle.</div><div class="finding-fix"><strong>Fix:</strong> Publish stateful precedence, confirmation/announcement, empty/nonempty Ctrl+D, terminal restoration, cleanup, and race tests.</div><div class="reviewer-source">Sources: accessibility A24</div></article><article class="finding"><header><span class="badge badge-sev-medium">medium</span><h3 class="finding-title">Context provenance is not bound to authority decisions</h3><span class="finding-location">DESIGN.md 204,207–209; EXPERIENCE.md 135–141; epics 113–128,194–200</span></header><div class="finding-note"><strong>F37.</strong> Compaction or pin changes before dispatch can make approval refer to a different context than the one sent.</div><div class="finding-fix"><strong>Fix:</strong> Bind approval/Evidence to final ContextManifest identity and invalidate on context/destination changes.</div><div class="reviewer-source">Sources: control 13</div></article><article class="finding"><header><span class="badge badge-sev-medium">medium</span><h3 class="finding-title">Completion language conflates round and operation outcomes</h3><span class="finding-location">DESIGN.md 208–209; EXPERIENCE.md 48–63,188–194,206–217; epics 8–17,63–77</span></header><div class="finding-note"><strong>F38.</strong> A local commit plus cancelled verification or unknown remote call can read as generic success.</div><div class="finding-fix"><strong>Fix:</strong> Separate operation and Prompt Round status; reserve affirmative success for verified success and carry strongest unresolved state.</div><div class="reviewer-source">Sources: control 14</div></article><article class="finding"><header><span class="badge badge-sev-medium">medium</span><h3 class="finding-title">Dismissal can preserve dangerous pending state</h3><span class="finding-location">EXPERIENCE.md 69–84,163–176; DESIGN.md 200–202; epics 264–276</span></header><div class="finding-note"><strong>F39.</strong> Esc can dismiss an overlay while a prepared operation remains queued for later accidental or background authorization.</div><div class="finding-fix"><strong>Fix:</strong> Make Esc non-authorizing; mark pending work dismissed or explicitly resumable, never auto-dispatch, and require re-review.</div><div class="reviewer-source">Sources: control 15</div></article><article class="finding"><header><span class="badge badge-sev-medium">medium</span><h3 class="finding-title">Boundary Expansion lifecycle is not discoverable</h3><span class="finding-location">EXPERIENCE.md 104–115,143–151; addendum 52–57,116–140; epics 42–58,97–110</span></header><div class="finding-note"><strong>F40.</strong> Durable authority can persist across sessions without inventory for resource, scope, expiry, provenance, revision, or revoke control.</div><div class="finding-fix"><strong>Fix:</strong> Add inventory, grant preview, lifecycle/revalidation/revoke controls, affected-proposal coverage, and durable revocation events.</div><div class="reviewer-source">Sources: control 16</div></article></div></details></section>
+<section class="dimension"><details><summary><h2>Visual reference coverage</h2><span class="verdict-pill verdict-strong">strong</span></summary><div class="dim-body"><div class="dim-judgment"><p>No mockups, wireframes, or imports were produced; there are no orphaned visual references.</p></div></div><div class="findings-list"></div></details></section>
+<section class="dimension"><details open><summary><h2>Bloat &amp; overspecification</h2><span class="verdict-pill verdict-thin">thin</span></summary><div class="dim-body"><div class="dim-judgment"><p>Safety repetition helps, but the experience spine often restates architecture mechanisms.</p></div></div><div class="findings-list"><article class="finding"><header><span class="badge badge-sev-medium">medium</span><h3 class="finding-title">Architecture mechanics are repeated in the experience spine</h3><span class="finding-location">EXPERIENCE.md 18–24,117–123,137–161</span></header><div class="finding-note"><strong>R5.</strong> Protocol, durable-event, encryption, and storage detail obscures user-visible behavior and unresolved UX decisions.</div><div class="finding-fix"><strong>Fix:</strong> Keep invariants and consequences in EXPERIENCE.md; cross-reference architecture for mechanisms.</div><div class="reviewer-source">Sources: review-rubric.md</div></article></div></details></section>
+<section class="dimension"><details><summary><h2>Inheritance discipline</h2><span class="verdict-pill verdict-adequate">adequate</span></summary><div class="dim-body"><div class="dim-judgment"><p>Sources and terminology resolve, but UJ-to-flow traceability is weak.</p></div></div><div class="findings-list"><article class="finding"><header><span class="badge badge-sev-medium">medium</span><h3 class="finding-title">Key Flows do not preserve source UJ identifiers</h3><span class="finding-location">EXPERIENCE.md 193,206,219,232,243; source PRD UJ headings</span></header><div class="finding-note"><strong>R6.</strong> Local flow names prevent mechanical proof of source correspondence.</div><div class="finding-fix"><strong>Fix:</strong> Put verbatim UJ identifiers in headings or add a mapping table.</div><div class="reviewer-source">Sources: review-rubric.md</div></article></div></details></section>
+<section class="dimension"><details><summary><h2>Shape fit</h2><span class="verdict-pill verdict-strong">strong</span></summary><div class="dim-body"><div class="dim-judgment"><p>Required spine shape is satisfied and product-specific sections add value.</p></div></div><div class="findings-list"><article class="finding"><header><span class="badge badge-sev-high">high</span><h3 class="finding-title">Near-clone command and keyboard contract is open</h3><span class="finding-location">DESIGN.md 141–145,196–208; EXPERIENCE.md 163–176; epics 264–277</span></header><div class="finding-note"><strong>F6.</strong> Slash grammar, aliases, quoting, history, completion, submit, interruption, and deliberate Claude Code deviations are unspecified.</div><div class="finding-fix"><strong>Fix:</strong> Publish a compatibility table for every command/key and unsupported familiar control.</div><div class="reviewer-source">Sources: terminal H-02</div></article><article class="finding"><header><span class="badge badge-sev-medium">medium</span><h3 class="finding-title">Specialist discovery risks implying capability parity</h3><span class="finding-location">DESIGN.md 141–145,203–208; EXPERIENCE.md 22–24,37–38,125–133; addendum 7–31</span></header><div class="finding-note"><strong>F31.</strong> Near-clone language and `/tools` catalog can imply unrestricted provider/tool extensibility despite four reviewed Release 1 integrations.</div><div class="finding-fix"><strong>Fix:</strong> Distinguish working/catalogued/disabled/unconfigured/quarantined and repeat non-invokable boundaries in help, completion, tools, models, onboarding, and summaries.</div><div class="reviewer-source">Sources: terminal H-11</div></article><article class="finding"><header><span class="badge badge-sev-medium">medium</span><h3 class="finding-title">First-run command surface is too broad</h3><span class="finding-location">EXPERIENCE.md 26–46,163–176; epics 52–59,304–306</span></header><div class="finding-note"><strong>F32.</strong> Flat completion exposes authority/context/rollback/tools/session terms before basic prompt flow is learned.</div><div class="finding-fix"><strong>Fix:</strong> Add categorized completion, descriptions/examples, contextual ranking, help topics, and an essential first-run subset.</div><div class="reviewer-source">Sources: terminal M-12</div></article></div></details></section>
+
+    <!-- TEMPLATE: one section per extra reviewer that ran (accessibility,
+         adversarial, brand-conformance, etc.). Skip this block entirely if
+         only the rubric walker ran. -->
+<section class="reviewer-section"><details><summary><h2>Accessibility review</h2><span class="reviewer-source">review-accessibility.md</span></summary><div class="dim-body"><div class="dim-judgment"><p>Slogans about text fallback, Thai preservation, and headless parity are not an accessible terminal product. The review’s release-blocking gaps in focus, stale approval, noninteractive behavior, live announcements, IME, widths, warnings, and secret handling are consolidated above.</p><p><strong>Consolidated references:</strong> A11–A28 → F1–F5, F7, F9–F16, F22, F26–F29.</p></div></div></details></section><section class="reviewer-section"><details><summary><h2>Terminal usability review</h2><span class="reviewer-source">review-terminal-usability.md</span></summary><div class="dim-body"><div class="dim-judgment"><p>Not implementation-ready for terminal interaction. Near-clone familiarity is directionally clear, but command grammar, composer, viewport, status priority, recovery navigation, narrow widths, and noninteractive behavior remain open.</p><p><strong>Consolidated references:</strong> H-01–H-11 and M-12–M-16 → F5–F8, F13, F17, F30–F35.</p></div></div></details></section><section class="reviewer-section"><details><summary><h2>Control, trust, and authority review</h2><span class="reviewer-source">review-control-trust.md</span></summary><div class="dim-body"><div class="dim-judgment"><p>Not release-grade as a human-control contract: users can lose sight of authority, approve a different dispatched effect, misunderstand remote outcomes, or fail to recover from races. The sensitive-data policy is a release blocker.</p><p><strong>Consolidated references:</strong> Findings 1–17 → F2–F5, F18–F25, F37–F40.</p></div></div></details></section>
+
+    <!-- TEMPLATE: mechanical notes — short, bulleted. Skip if there are none. -->
+<div class="mechanical"><h3>Mechanical notes</h3><ul><li>Deduplicated severity totals: critical 4, high 24, medium 18, low 0.</li><li>Category verdicts lift review-rubric.md; overlapping extra-reviewer findings are merged by failure scenario and cross-referenced.</li><li>DESIGN.md, EXPERIENCE.md, and individual review files were not modified.</li><li>No missing-hex token, broken source path, Mermaid block, mockup/import link, or visual-reference orphan was found by the rubric review.</li></ul></div>
+
+    <footer class="report-footer">
+      <div class="meta">
+        <span>Rubric: /Users/temicide/Documents/thcode/.claude/skills/bmad-ux/references/validate.md</span>
+        <span>Generated: 2026-07-17</span>
+      </div>
+    </footer>
+  </div>
+</body>
+</html>
