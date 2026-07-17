@@ -105,12 +105,17 @@ import {
   applyFileEffect,
   revalidateFileEffect,
   detectConflict,
+  previewDeletion,
+  applyDeletionEffect,
 } from './effects/index.js';
 import type {
   PreviewResult,
   EffectOutcome,
   EffectConflict,
   FsMutator,
+  DeletionPreviewResult,
+  DeletionOutcome,
+  QuarantineProvider,
 } from './effects/index.js';
 import type {
   AuthorityProjection,
@@ -849,6 +854,95 @@ export class CoreApp {
     });
   }
 
+  /** Story 3.6 AC #1: preview a destructive deletion effect. Labeled
+   * `DESTRUCTIVE`, shows exact root identity, ordered descendant identity/content
+   * manifest, count/size bounds, symlink/junction/mount/open-handle policy,
+   * checkpoint coverage, and exclusions. Plan mode returns `deny` under every
+   * profile. */
+  previewDelete(
+    kind: 'delete_file' | 'delete_directory',
+    target: string,
+    opts: { descendantManifest?: readonly import('./effects/deletionTypes.js').DescendantIdentity[] } = {},
+  ): DeletionPreviewResult {
+    const a = this.activation.snapshot();
+    return previewDeletion(kind, target, {
+      workspace: this.workspace,
+      fsProbe: defaultFsProbe(),
+      clock: this.clock,
+      mode: a.mode,
+      activationId: a.activationId,
+      activationRevision: a.revision,
+      descendantManifest: opts.descendantManifest,
+    });
+  }
+
+  /** Story 3.6 AC #2, AC #3, AC #4, AC #5: apply a guarded destructive deletion
+   * with quarantine. Runs the exact ordered execution: resolve identity ->
+   * capture digest/version + descendant manifest -> PEP checks -> stage checkpoint
+   * -> make durable -> atomically consume authorization + append
+   * EffectDispatchCommitted -> atomically rename/quarantine root on same
+   * filesystem -> remove quarantined content -> durable result/deletion Evidence
+   * -> publish checkpoint reference + terminal event post-commit. */
+  applyDeleteEffect(
+    kind: 'delete_file' | 'delete_directory',
+    target: string,
+    authorization: import('./permissions/authorization.js').Authorization,
+    opts: {
+      quarantineProvider?: QuarantineProvider;
+      kvStore?: KeyValueStore;
+      blobStore?: BlobStore;
+      encKey?: Buffer;
+    } = {},
+  ): DeletionOutcome {
+    const a = this.activation.snapshot();
+    const kvStore = opts.kvStore;
+    const blobStore = opts.blobStore;
+    const encKey = opts.encKey;
+
+    if (!kvStore) {
+      return {
+        ok: false,
+        kind: 'unknown-outcome',
+        reason: 'no key-value store available for checkpoint staging',
+        reasonCode: 'no-kv-store',
+        evidence: {
+          operationId: authorization.operationId as unknown as OperationId,
+          rootPath: target,
+          changedDescendant: null,
+          expectedDigest: null,
+          actualDigest: null,
+          expectedVersion: null,
+          actualVersion: null,
+          timestamp: this.clock(),
+        },
+      };
+    }
+
+    const checkpointRepo = new CheckpointRepository(kvStore, this.clock);
+    const artifactStore = blobStore && encKey ? new ArtifactStore(blobStore, encKey) : undefined;
+
+    return applyDeletionEffect(kind, target, authorization, {
+      workspace: this.workspace,
+      fsProbe: defaultFsProbe(),
+      quarantineProvider: opts.quarantineProvider ?? defaultQuarantineProvider(),
+      clock: this.clock,
+      policyState: {
+        mode: a.mode,
+        profile: a.profile,
+        sensitiveOverride: a.sensitiveTransferOverride,
+      },
+      checkpointRepo,
+      artifactStore,
+      kvStore,
+      blobStore,
+      journal: this.repo ?? { append: () => 0 },
+      sessionId: this.sessionId(),
+      activationId: a.activationId,
+      activationRevision: a.revision,
+      authorityRevision: a.revision,
+    });
+  }
+
   /** Story 3.4 AC #1, AC #4, AC #5: bounded directory listing through PEP
    * mediation. Resolves + revalidates every resource identity, stays within
    * Workspace, no-follow, bounds recursion + file count, returns sanitized
@@ -1198,6 +1292,38 @@ function defaultFsMutator(): FsMutator {
       // eslint-disable-next-line @typescript-eslint/no-require-imports
       const fs = require('node:fs') as typeof import('node:fs');
       fs.mkdirSync(dir, { recursive: true });
+    },
+  };
+}
+
+/** Default QuarantineProvider using real node:fs (for production use).
+ * Renames the target into a quarantine directory on the same filesystem,
+ * then removes the quarantined content. */
+function defaultQuarantineProvider(): QuarantineProvider {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const fs = require('node:fs') as typeof import('node:fs');
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const path = require('node:path') as typeof import('node:path');
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const os = require('node:os') as typeof import('node:os');
+
+  const quarantineDir = path.join(os.tmpdir(), 'thcode-quarantine');
+
+  return {
+    quarantine(originalPath: string): string {
+      // Ensure quarantine directory exists.
+      fs.mkdirSync(quarantineDir, { recursive: true });
+      const basename = path.basename(originalPath);
+      const quarantinePath = path.join(quarantineDir, `${basename}-${Date.now()}`);
+      fs.renameSync(originalPath, quarantinePath);
+      return quarantinePath;
+    },
+    removeQuarantined(quarantinePath: string): void {
+      fs.rmSync(quarantinePath, { recursive: true, force: true });
+    },
+    quarantinePathFor(originalPath: string): string {
+      const basename = path.basename(originalPath);
+      return path.join(quarantineDir, `${basename}-${Date.now()}`);
     },
   };
 }
