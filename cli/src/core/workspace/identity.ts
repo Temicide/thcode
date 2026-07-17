@@ -81,6 +81,9 @@ export function defaultFsProbe(): FsProbe {
         return null;
       }
     },
+    readFile(p: string): Uint8Array {
+      return fs().readFileSync(p);
+    },
   };
 }
 

@@ -59,6 +59,11 @@ function inMemoryFsProbe(files: Map<string, { content?: string; isDir?: boolean;
     statfs(_p: string): { type: number } | null {
       return { type: 0x0100 }; // fake filesystem type
     },
+    readFile(p: string): Uint8Array {
+      const entry = files.get(p);
+      if (!entry || entry.content === undefined) throw new Error(`ENOENT: ${p}`);
+      return new TextEncoder().encode(entry.content);
+    },
   };
 }
 

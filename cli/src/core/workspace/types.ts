@@ -125,6 +125,8 @@ export interface FsProbe {
   };
   readlink(path: string): string;
   statfs(path: string): { type: number } | null;
+  /** Read the full content of a file as bytes. Throws on error. */
+  readFile(path: string): Uint8Array;
 }
 
 export interface PlatformProbe {

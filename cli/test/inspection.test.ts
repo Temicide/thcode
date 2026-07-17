@@ -68,6 +68,11 @@ function inMemoryInspectionFsProbe(files: Map<string, FsEntry>): InspectionFsPro
     statfs(_p: string): { type: number } | null {
       return { type: 0x0100 };
     },
+    readFile(p: string): Uint8Array {
+      const entry = files.get(p);
+      if (!entry || entry.content === undefined) throw new Error(`ENOENT: ${p}`);
+      return new TextEncoder().encode(entry.content);
+    },
     readdirSync(p: string): string[] {
       const normalized = path.resolve(p);
       const dir = files.get(normalized);

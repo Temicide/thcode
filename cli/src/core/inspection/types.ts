@@ -65,6 +65,9 @@ export function defaultInspectionFsProbe(): InspectionFsProbe {
     readFileSync(p: string): Buffer {
       return nodeFs.readFileSync(p);
     },
+    readFile(p: string): Uint8Array {
+      return nodeFs.readFileSync(p);
+    },
   };
 }
 

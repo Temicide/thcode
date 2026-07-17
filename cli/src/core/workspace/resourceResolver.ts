@@ -93,10 +93,9 @@ export function resolveResource(
  * Compute a SHA-256 digest of a file's content. Uses the fsProbe's underlying
  * filesystem access. Returns hex-encoded digest or null on failure.
  */
-function computeDigest(filePath: string, _fsProbe: FsProbe): string | null {
+function computeDigest(filePath: string, fsProbe: FsProbe): string | null {
   try {
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
-    const content = require('node:fs').readFileSync(filePath);
+    const content = fsProbe.readFile(filePath);
     return createHash('sha256').update(content).digest('hex');
   } catch {
     return null;

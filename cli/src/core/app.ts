@@ -62,6 +62,7 @@ import {
   type CoreCommand,
 } from './protocol/commandGrammar.js';
 import { asSessionId, newOperationId } from './protocol/ids.js';
+import type { OperationId } from './protocol/ids.js';
 import type { SessionRepository } from './sessions/repository.js';
 import { CheckpointRepository } from './checkpoints/checkpointRepository.js';
 import { ArtifactStore } from './checkpoints/artifactStore.js';
@@ -99,6 +100,18 @@ import type {
   ReadResult,
   SearchResult,
 } from './inspection/index.js';
+import {
+  previewFileEffect,
+  applyFileEffect,
+  revalidateFileEffect,
+  detectConflict,
+} from './effects/index.js';
+import type {
+  PreviewResult,
+  EffectOutcome,
+  EffectConflict,
+  FsMutator,
+} from './effects/index.js';
 import type {
   AuthorityProjection,
   ConversationProjection,
@@ -674,6 +687,168 @@ export class CoreApp {
     });
   }
 
+  /** Story 3.5 AC #1: preview a create_file effect. Shows exact target identity,
+   * expected pre-image digest/version or `absent`, bounded content summary,
+   * resulting post-image digest plan, exclusions, OperationId, authority, and
+   * checkpoint coverage. Plan mode returns `deny` and cannot authorize. */
+  previewCreateFile(target: string, content: Uint8Array): PreviewResult {
+    const a = this.activation.snapshot();
+    return previewFileEffect('create_file', target, content, {
+      workspace: this.workspace,
+      fsProbe: defaultFsProbe(),
+      clock: this.clock,
+      mode: a.mode,
+      activationId: a.activationId,
+      activationRevision: a.revision,
+    });
+  }
+
+  /** Story 3.5 AC #1: preview an edit_file effect. Same fields as
+   * previewCreateFile. Plan mode returns `deny` and cannot authorize. */
+  previewEditFile(target: string, content: Uint8Array): PreviewResult {
+    const a = this.activation.snapshot();
+    return previewFileEffect('edit_file', target, content, {
+      workspace: this.workspace,
+      fsProbe: defaultFsProbe(),
+      clock: this.clock,
+      mode: a.mode,
+      activationId: a.activationId,
+      activationRevision: a.revision,
+    });
+  }
+
+  /** Story 3.5 AC #2, AC #3, AC #4, AC #5: apply a guarded built-in file
+   * create/edit effect. Runs the exact ordered execution: resolve identity ->
+   * capture digest/version -> PEP checks -> stage checkpoint -> make durable ->
+   * atomically consume authorization + append EffectDispatchCommitted ->
+   * native mutation -> durable result/post-image -> publish checkpoint reference
+   * + terminal event post-commit. Reuses the existing authorization/PEP/
+   * checkpoint/journal seams. */
+  applyFileEffect(
+    kind: 'create_file' | 'edit_file',
+    target: string,
+    content: Uint8Array,
+    authorization: import('./permissions/authorization.js').Authorization,
+    opts: {
+      fsMutator?: FsMutator;
+      kvStore?: KeyValueStore;
+      blobStore?: BlobStore;
+      encKey?: Buffer;
+    } = {},
+  ): EffectOutcome {
+    const a = this.activation.snapshot();
+
+    // Revalidate the authorization against the current proposal (AC #3).
+    const staleCheck = revalidateFileEffect(
+      {
+        kind,
+        operationId: authorization.operationId as unknown as OperationId,
+        target: { canonicalPath: '', displayPath: target },
+        expectedPreImage: { digest: null, version: null, absent: kind === 'create_file' },
+        content,
+        contentSummary: `${content.length} bytes`,
+        postImageDigest: '',
+        postImageSizeBytes: content.length,
+        lineCount: 0,
+        exclusions: [],
+        checkpointCoverage: 'fully-protected',
+        authorizationId: authorization.authorizationId,
+        activationId: a.activationId,
+        activationRevision: a.revision,
+      },
+      authorization,
+      {
+        activationId: a.activationId,
+        activationRevision: a.revision,
+        authorityRevision: a.revision,
+        now: this.clock(),
+      },
+    );
+
+    if (!staleCheck.ok) {
+      return {
+        ok: false,
+        kind: 'stale-approval',
+        reason: staleCheck.reason,
+        reasonCode: staleCheck.reasonCode,
+        evidence: {
+          operationId: authorization.operationId as unknown as OperationId,
+          expectedDigest: null,
+          actualDigest: null,
+          expectedVersion: null,
+          actualVersion: null,
+          targetPath: target,
+          timestamp: this.clock(),
+        },
+      };
+    }
+
+    // Build the effect context and execute.
+    const kvStore = opts.kvStore;
+    const blobStore = opts.blobStore;
+    const encKey = opts.encKey;
+
+    if (!kvStore) {
+      return {
+        ok: false,
+        kind: 'unknown-outcome',
+        reason: 'no key-value store available for checkpoint staging',
+        reasonCode: 'no-kv-store',
+        evidence: {
+          operationId: authorization.operationId as unknown as OperationId,
+          expectedDigest: null,
+          actualDigest: null,
+          expectedVersion: null,
+          actualVersion: null,
+          targetPath: target,
+          timestamp: this.clock(),
+        },
+      };
+    }
+
+    const checkpointRepo = new CheckpointRepository(kvStore, this.clock);
+    const artifactStore = blobStore && encKey ? new ArtifactStore(blobStore, encKey) : undefined;
+
+    return applyFileEffect(kind, target, content, authorization, {
+      workspace: this.workspace,
+      fsProbe: defaultFsProbe(),
+      fsMutator: opts.fsMutator ?? defaultFsMutator(),
+      clock: this.clock,
+      policyState: {
+        mode: a.mode,
+        profile: a.profile,
+        sensitiveOverride: a.sensitiveTransferOverride,
+      },
+      checkpointRepo,
+      artifactStore,
+      kvStore,
+      blobStore,
+      journal: this.repo ?? { append: () => 0 },
+      sessionId: this.sessionId(),
+      activationId: a.activationId,
+      activationRevision: a.revision,
+      authorityRevision: a.revision,
+    });
+  }
+
+  /** Story 3.5 AC #4: detect conflicts before executing a file effect. */
+  checkFileEffectConflict(
+    targetPath: string,
+    expectedDigest: string | null,
+    expectedVersion: string | null,
+  ): EffectConflict | null {
+    const operationId = newOperationId();
+    return detectConflict({
+      operationId,
+      targetPath,
+      expectedDigest,
+      expectedVersion,
+      workspace: this.workspace,
+      fsProbe: defaultFsProbe(),
+      clock: this.clock,
+    });
+  }
+
   /** Story 3.4 AC #1, AC #4, AC #5: bounded directory listing through PEP
    * mediation. Resolves + revalidates every resource identity, stays within
    * Workspace, no-follow, bounds recursion + file count, returns sanitized
@@ -1009,4 +1184,20 @@ export class CoreApp {
     );
     return result.text;
   }
+}
+
+/** Default FsMutator using real node:fs (for production use). */
+function defaultFsMutator(): FsMutator {
+  return {
+    writeFile(path: string, content: Uint8Array): void {
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      const fs = require('node:fs') as typeof import('node:fs');
+      fs.writeFileSync(path, content);
+    },
+    mkdir(dir: string): void {
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      const fs = require('node:fs') as typeof import('node:fs');
+      fs.mkdirSync(dir, { recursive: true });
+    },
+  };
 }
