@@ -45,6 +45,15 @@ import { HealthRegistry, type HealthSnapshot } from './providers/health.js';
 import { typhoonGeneration, typhoonHealthProbe } from './providers/typhoonHealth.js';
 import { createDefaultToolRegistry, type ToolRegistry } from './tools/registry.js';
 import { assertCompatibleVersion, PROTOCOL_MAJOR } from './protocol/coreProtocol.js';
+import {
+  COMMAND_GRAMMAR,
+  commandRejection,
+  noTtyCommandBlocked,
+  parseCommand,
+  renderCommandOutput,
+  type CommandOutput,
+  type CoreCommand,
+} from './protocol/commandGrammar.js';
 import { asSessionId, newOperationId } from './protocol/ids.js';
 import type { SessionRepository } from './sessions/repository.js';
 import type {
@@ -559,6 +568,75 @@ export class CoreApp {
   /** Story 2.3 AC #5: full, auditable inventory of Boundary Expansions. */
   listBoundaryExpansions(): readonly BoundaryExpansion[] {
     return this.boundaryExpansions.list();
+  }
+
+  /** Story 2.13: dispatch a typed command through the frozen grammar. The
+   * command surface dispatches ONLY through CoreApp — no shell expansion,
+   * globbing, interpolation, substitution, implicit Workspace rebinding, or
+   * user-defined executables. A malformed/unsupported command returns a
+   * sanitized deterministic error with the canonical exit mapping and never
+   * executes a shell command or mutates a file (AC #4). `requireInteractive`
+   * flags a command that needs interactive approval; with no TTY the caller
+   * passes `hasTty: false` and the dispatch fails closed (AC #6). */
+  dispatchCommand(input: string, opts: { hasTty?: boolean; requireInteractive?: boolean } = {}): CommandOutput {
+    const parse = parseCommand(input);
+    if (!parse.ok) {
+      const rej = commandRejection(parse);
+      // AC #4: record the rejected intent in activity/Evidence when durable
+      // storage is available (sanitized; no raw command beyond what cleared).
+      this.repo?.append(
+        durableEvent(
+          { kind: 'OperationBlocked', operationId: newOperationId(), cause: rej.cause },
+          asSessionId(this.sessionId()),
+          { provenanceKind: 'deterministic', provenanceSource: 'command-grammar', clock: this.clock },
+        ),
+      );
+      return { stdout: '', stderr: `${rej.cause}\n${rej.usage}`, json: JSON.stringify({ status: 'blocked', cause: rej.cause, exitClass: rej.exitClass, exitCode: rej.exitCode, usage: rej.usage }), exitCode: rej.exitCode };
+    }
+    const cmd: CoreCommand = parse.command;
+    const spec = COMMAND_GRAMMAR.find((c) => c.command === cmd)!;
+    // AC #6: a command that may require interactive approval fails closed with
+    // no TTY — never waits on stdin, leaves no pending authority.
+    if (spec.mayRequireApproval && opts.requireInteractive && opts.hasTty === false) {
+      const blocked = noTtyCommandBlocked();
+      return { stdout: '', stderr: `${blocked.cause}: ${blocked.next}`, json: JSON.stringify({ status: 'blocked', cause: blocked.cause, next: blocked.next, exitClass: blocked.exitClass, exitCode: blocked.exitCode }), exitCode: blocked.exitCode };
+    }
+    return this.executeCommand(cmd, parse.args);
+  }
+
+  /** Map a parsed command to its CoreApp projection (AC #1, AC #3, AC #5). */
+  private executeCommand(cmd: CoreCommand, args: readonly string[]): CommandOutput {
+    switch (cmd) {
+      case 'status':
+        return renderCommandOutput({ status: 'succeeded', body: JSON.stringify(this.statusProjection(), null, 2), nextStep: 'continue' });
+      case 'permissions':
+        return renderCommandOutput({ status: 'succeeded', body: `PermissionMatrix v${this.pep.evaluate({ actionClass: 'read_file', state: { mode: 'build', profile: 'manual' }, activationRevision: 1 }).matrixVersion}`, nextStep: 'continue' });
+      case 'mode': {
+        if (args[0] !== 'plan' && args[0] !== 'build') {
+          return renderCommandOutput({ status: 'blocked', cause: 'mode requires plan|build', nextStep: 'usage: /mode plan|build' });
+        }
+        const applied = this.setMode(args[0]);
+        return renderCommandOutput({ status: applied ? 'succeeded' : 'blocked', cause: applied ? undefined : 'mode change refused (composer busy or same mode)', nextStep: applied ? 'continue' : 'retry at an idle composer' });
+      }
+      case 'boundaries':
+        return renderCommandOutput({ status: 'succeeded', body: JSON.stringify(this.listBoundaryExpansions().map((b) => ({ expansionId: b.expansionId, resourceIdentity: b.resourceIdentity, revoked: b.revoked, expiresAt: b.expiresAt })), null, 2), nextStep: 'continue' });
+      case 'connections':
+        return renderCommandOutput({ status: 'succeeded', body: JSON.stringify({ providerId: this.providers.selectedId, health: this.health.snapshot(this.providers.selectedId).state }, null, 2), nextStep: 'continue' });
+      case 'activity':
+        return renderCommandOutput({ status: 'succeeded', body: 'activity projection available via the journal replay surface', nextStep: 'continue' });
+      case 'models':
+        // AC #3: /models is Typhoon inspection-only; unresolved pins honestly labeled.
+        return renderCommandOutput({ status: 'succeeded', body: `Typhoon inspection-only — model: ${this.providers.selected.capabilities.modelId}`, nextStep: 'continue' });
+      case 'tools':
+        // AC #3: /tools exposes registry/diagnostic controls; does NOT invoke the
+        // Epic 4 Capability Registry or Specialist services; Catalogued entries
+        // are not made invokable.
+        return renderCommandOutput({ status: 'succeeded', body: this.listCatalog().join('\n'), nextStep: 'continue' });
+      case 'check':
+        return renderCommandOutput({ status: 'succeeded', body: 'dependency preflight is a non-mutating probe (Epic 3 surface)', nextStep: 'continue' });
+      case 'help':
+        return renderCommandOutput({ status: 'succeeded', body: COMMAND_GRAMMAR.map((c) => `/${c.command}${c.aliases.length ? ` (${c.aliases.map((a) => `/${a}`).join(', ')})` : ''} — ${c.description}`).join('\n'), nextStep: 'continue' });
+    }
   }
 
   /** `/models` listing: adapters with availability + reasons (ADR 0004). */
