@@ -109,7 +109,20 @@ export function App({ core }: AppProps) {
       exit();
       return;
     }
+    // Story 2.14 AC #1: Esc cancels an IME preedit / dismisses an overlay
+    // without authorizing or changing settings. Mirrors the control-surface
+    // contract (src/core/protocol/controlSurface.ts) without crossing the
+    // AD-1 UI boundary — the contract is the tested source of truth.
+    if (key.escape) {
+      if (input.length > 0) setInput('');
+      return;
+    }
+    // Story 2.14 AC #1: Shift+Tab switches Plan/Build ONLY at an idle
+    // composer. While a prompt round is in flight the toggle is ignored
+    // (deferred, not silently applied). Mirrors the control-surface contract
+    // without crossing the AD-1 UI boundary.
     if (key.tab && key.shift) {
+      if (busy) return;
       const mode = core.toggleMode();
       push('system', `Work Mode → ${mode.toUpperCase()}`);
       forceRender((n) => n + 1);
