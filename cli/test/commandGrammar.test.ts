@@ -104,3 +104,72 @@ describe('Command dispatch — /help lists the grammar', () => {
     for (const c of COMMAND_GRAMMAR) expect(out.stdout).toContain(`/${c.command}`);
   });
 });
+
+describe('Command dispatch — /rollback (Story 3.12)', () => {
+  it('/rollback is a declared command', () => {
+    const cmds = COMMAND_GRAMMAR.map((c) => c.command);
+    expect(cmds).toContain('rollback');
+  });
+
+  it('/rollback has alias /rb', () => {
+    const spec = COMMAND_GRAMMAR.find((c) => c.command === 'rollback');
+    expect(spec).toBeTruthy();
+    expect(spec!.aliases).toContain('rb');
+  });
+
+  it('/rollback list parses successfully', () => {
+    const r = parseCommand('/rollback list');
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      expect(r.command).toBe('rollback');
+      expect(r.args).toEqual(['list']);
+    }
+  });
+
+  it('/rollback inspect <id> parses successfully', () => {
+    const r = parseCommand('/rollback inspect abc-123');
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      expect(r.command).toBe('rollback');
+      expect(r.args).toEqual(['inspect', 'abc-123']);
+    }
+  });
+
+  it('/rb list parses via alias', () => {
+    const r = parseCommand('/rb list');
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      expect(r.command).toBe('rollback');
+      expect(r.args).toEqual(['list']);
+    }
+  });
+
+  it('/rollback without subcommand returns blocked', () => {
+    const out = app().dispatchCommand('/rollback');
+    expect(out.exitCode).toBe(20);
+    expect(out.stderr).toContain('rollback requires a subcommand');
+  });
+
+  it('/rollback with unknown subcommand returns blocked', () => {
+    const out = app().dispatchCommand('/rollback apply');
+    expect(out.exitCode).toBe(20);
+    expect(out.stderr).toContain('rollback requires a subcommand');
+  });
+
+  it('/rollback list without kvstore returns blocked', () => {
+    const out = app().dispatchCommand('/rollback list');
+    expect(out.exitCode).toBe(20);
+    expect(out.stderr).toContain('no key-value store');
+  });
+
+  it('/rollback inspect without kvstore returns blocked', () => {
+    const out = app().dispatchCommand('/rollback inspect abc');
+    expect(out.exitCode).toBe(20);
+    expect(out.stderr).toContain('no key-value store');
+  });
+
+  it('/rollback is listed in /help output', () => {
+    const out = app().dispatchCommand('/help');
+    expect(out.stdout).toContain('/rollback');
+  });
+});

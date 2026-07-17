@@ -32,7 +32,8 @@ export type CoreCommand =
   | 'models'
   | 'tools'
   | 'check'
-  | 'help';
+  | 'help'
+  | 'rollback';
 
 export interface CommandSpec {
   readonly command: CoreCommand;
@@ -56,6 +57,7 @@ export const COMMAND_GRAMMAR: readonly CommandSpec[] = Object.freeze([
   { command: 'tools', aliases: [], description: 'catalog/registry + diagnostic controls', mayRequireApproval: false },
   { command: 'check', aliases: [], description: 'repeat non-mutating dependency preflight', mayRequireApproval: false },
   { command: 'help', aliases: ['?', 'h'], description: 'list the frozen command grammar', mayRequireApproval: false },
+  { command: 'rollback', aliases: ['rb'], description: 'discover and preview eligible rollback checkpoints (list/inspect)', mayRequireApproval: false },
 ]);
 
 const SHELL_METACHARACTER_RE = /[$`*?;|<>&]|\\\n|\$\(|\bsh\b\s+-c/i;

@@ -163,6 +163,13 @@ import type { DepPreflightResult } from './depPreflight/types.js';
 import { runHelloWorldProof } from './proof/index.js';
 import type { ProofEnvironment, ProofResult } from './proof/types.js';
 import { sanitizer } from './security/sanitizer.js';
+import {
+  listCheckpoints,
+  inspectCheckpoint,
+  renderRollbackListOutput,
+  renderRollbackInspectOutput,
+} from './rollback/index.js';
+import { asCheckpointId } from './checkpoints/types.js';
 
 export interface CoreStatus {
   readonly mode: WorkMode;
@@ -693,9 +700,11 @@ export class CoreApp {
    * CheckpointRepository backed by the given KeyValueStore. When no store is
    * provided, returns null (checkpointing is unavailable). */
   private _checkpointRepo: CheckpointRepository | null = null;
+  private _kvStore: KeyValueStore | null = null;
   checkpoints(store?: KeyValueStore): CheckpointRepository | null {
     if (store) {
       this._checkpointRepo = new CheckpointRepository(store, this.clock);
+      this._kvStore = store;
     }
     return this._checkpointRepo;
   }
@@ -1307,6 +1316,16 @@ export class CoreApp {
       }
       case 'help':
         return renderCommandOutput({ status: 'succeeded', body: COMMAND_GRAMMAR.map((c) => `/${c.command}${c.aliases.length ? ` (${c.aliases.map((a) => `/${a}`).join(', ')})` : ''} — ${c.description}`).join('\n'), nextStep: 'continue' });
+      case 'rollback': {
+        const sub = args[0];
+        if (sub === 'list') {
+          return this.rollbackList({ kvStore: this._kvStore ?? undefined });
+        }
+        if (sub === 'inspect' && args[1]) {
+          return this.rollbackInspect(args[1], { kvStore: this._kvStore ?? undefined });
+        }
+        return renderCommandOutput({ status: 'blocked', cause: 'rollback requires a subcommand: list or inspect <id>', nextStep: 'usage: /rollback list | /rollback inspect <id>' });
+      }
     }
   }
 
@@ -1365,6 +1384,46 @@ export class CoreApp {
       this.history.reduce((n, m) => n + m.content.length, 0) / 4,
     );
     return result.text;
+  }
+
+  // --- Story 3.12: Rollback discovery and preview ---
+
+  /**
+   * List committed checkpoints for the current Session.
+   * Returns a CommandOutput for narrow/redirected/headless parity (AC #5).
+   * Incomplete/corrupt/expired/locked/unavailable-bytes checkpoints are HIDDEN
+   * from apply-eligible targets by default (AC #3).
+   */
+  rollbackList(opts: { kvStore?: KeyValueStore; includeHidden?: boolean } = {}): CommandOutput {
+    const kvStore = opts.kvStore;
+    if (!kvStore) {
+      return renderCommandOutput({ status: 'blocked', cause: 'no key-value store available for checkpoint discovery', nextStep: 'ensure a store is configured' });
+    }
+    const result = listCheckpoints(this.sessionId(), kvStore, this.clock, {
+      includeHidden: opts.includeHidden,
+    });
+    if (!result.ok) {
+      return renderCommandOutput({ status: 'blocked', cause: result.failure.message, nextStep: 'retry or inspect the checkpoint store' });
+    }
+    return renderRollbackListOutput(result.checkpoints);
+  }
+
+  /**
+   * Inspect a single checkpoint for rollback preview.
+   * Read-only — no target changes, approval, or native effect (AC #4).
+   * Incomplete/corrupt/expired/locked/unavailable-bytes checkpoints remain
+   * inspectable as non-authoritative/recovery records (AC #3).
+   */
+  rollbackInspect(checkpointId: string, opts: { kvStore?: KeyValueStore } = {}): CommandOutput {
+    const kvStore = opts.kvStore;
+    if (!kvStore) {
+      return renderCommandOutput({ status: 'blocked', cause: 'no key-value store available for checkpoint inspection', nextStep: 'ensure a store is configured' });
+    }
+    const result = inspectCheckpoint(asCheckpointId(checkpointId), kvStore, this.clock);
+    if (!result.ok) {
+      return renderCommandOutput({ status: 'blocked', cause: result.failure.message, nextStep: 'verify the checkpoint id and retry' });
+    }
+    return renderRollbackInspectOutput(result.preview);
   }
 
   // --- Story 3.9: Agent Loop hardening ---
