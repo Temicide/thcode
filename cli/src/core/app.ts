@@ -10,6 +10,8 @@ import { NEW_SESSION_DEFAULT, type PermissionProfile, type WorkMode } from './pe
 import { createCredentialStore, type CredentialStore } from './platform/index.js';
 import { createDefaultProviderRegistry, ProviderRegistry } from './providers/registry.js';
 import type { NormalizedMessage } from './providers/types.js';
+import { HealthRegistry, type HealthSnapshot } from './providers/health.js';
+import { typhoonGeneration, typhoonHealthProbe } from './providers/typhoonHealth.js';
 import { createDefaultToolRegistry, type ToolRegistry } from './tools/registry.js';
 import { assertCompatibleVersion, PROTOCOL_MAJOR } from './protocol/coreProtocol.js';
 
@@ -19,6 +21,7 @@ export interface CoreStatus {
   readonly providerId: string;
   readonly modelId: string;
   readonly contextPercent: number;
+  readonly healthState: string;
 }
 
 export interface CoreAppOptions {
@@ -26,12 +29,14 @@ export interface CoreAppOptions {
   credentials?: CredentialStore;
   providers?: ProviderRegistry;
   tools?: ToolRegistry;
+  health?: HealthRegistry;
 }
 
 export class CoreApp {
   readonly providers: ProviderRegistry;
   readonly tools: ToolRegistry;
   readonly credentials: CredentialStore;
+  readonly health: HealthRegistry;
   readonly workspaceRoot: string;
 
   private mode: WorkMode = NEW_SESSION_DEFAULT.mode;
@@ -48,12 +53,45 @@ export class CoreApp {
     this.credentials = opts.credentials ?? createCredentialStore();
     this.providers = opts.providers ?? createDefaultProviderRegistry();
     this.tools = opts.tools ?? createDefaultToolRegistry();
+    this.health = opts.health ?? new HealthRegistry();
     this.loop = new AgentLoop({
       providers: this.providers,
       tools: this.tools,
       credentials: this.credentials,
       workspaceRoot: this.workspaceRoot,
     });
+    // Register the Typhoon live probe and wire a generation on startup if a
+    // key is present (FR-2, FR-4, AD-8). A live check is run lazily by the
+    // caller via checkTyphoonHealth(); availability is never assumed from
+    // the presence of a key alone.
+    this.health.registerProbe(
+      'typhoon',
+      typhoonHealthProbe((g) => {
+        if (g.providerId !== 'typhoon') return null;
+        const syncGet = (this.credentials as unknown as { getSync?: (id: string) => string | null }).getSync;
+        return syncGet ? syncGet.call(this.credentials, 'typhoon') : null;
+      }),
+    );
+  }
+
+  /** Live Typhoon health check (FR-2, FR-4, AD-8). Registers the current
+   * effective configuration generation and runs the probe; returns the typed
+   * health snapshot. Never assumes `available` from a key alone. */
+  async checkTyphoonHealth(): Promise<HealthSnapshot> {
+    const caps = this.providers.selected.capabilities;
+    const syncGet = (this.credentials as unknown as { getSync?: (id: string) => string | null }).getSync;
+    const hasKey = syncGet ? syncGet.call(this.credentials, 'typhoon') !== null : false;
+    if (!hasKey) {
+      this.health.markUnconfigured('typhoon');
+      return this.health.snapshot('typhoon');
+    }
+    const g = typhoonGeneration({
+      credentialRevision: `rev-${Date.now().toString(36)}`,
+      adapterVersion: '1.0.0',
+      modelId: caps.modelId,
+    });
+    this.health.registerConfiguration(g);
+    return this.health.check('typhoon');
   }
 
   status(): CoreStatus {
@@ -65,6 +103,7 @@ export class CoreApp {
       providerId: this.providers.selectedId,
       modelId: caps.modelId,
       contextPercent: contextUtilizationPercent(this.estimatedContextTokens, capacity),
+      healthState: this.health.snapshot(this.providers.selectedId).state,
     };
   }
 
