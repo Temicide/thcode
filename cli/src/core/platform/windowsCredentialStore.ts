@@ -2,7 +2,7 @@ import { spawn } from 'node:child_process';
 import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import path from 'node:path';
-import type { CredentialId, CredentialStore } from './credentialStore.js';
+import type { CredentialId, CredentialStore, CredentialStoreAvailability } from './credentialStore.js';
 import { credentialsDir } from './paths.js';
 
 /**
@@ -68,6 +68,14 @@ export class WindowsCredentialStore implements CredentialStore {
 
   async delete(id: CredentialId): Promise<void> {
     await rm(this.fileFor(id), { force: true });
+  }
+
+  availability(): CredentialStoreAvailability {
+    // Non-mutating: the backing is DPAPI-file under pwsh.exe. We do not check
+    // pwsh availability here (that is the shell probe's job); we only declare
+    // the backend kind. If pwsh is missing, set/get will surface a typed error
+    // at first real use — preflight never writes a credential.
+    return { kind: 'ok', backend: 'windows-dpapi' };
   }
 
   private runPwsh(script: string, stdin: string): Promise<string> {

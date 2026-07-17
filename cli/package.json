@@ -12,13 +12,15 @@
   "files": [
     "dist",
     "catalog-manifest.json",
-    "README.md"
+    "README.md",
+    "BASELINE.md"
   ],
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "dev": "node --experimental-strip-types src/index.ts",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "prepublishOnly": "npm run build && npm test"
   },
   "keywords": [
     "thai",

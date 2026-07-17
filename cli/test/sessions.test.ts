@@ -12,18 +12,24 @@ afterAll(() => {
   rmSync(tmp, { recursive: true, force: true });
 });
 
+function openStore(creds: InMemoryCredentialStore, file: string): SessionStore {
+  const r = SessionStore.openSync(creds, file);
+  if (!r.ok) throw new Error(`open failed: ${r.cause}`);
+  return r.store;
+}
+
 describe('SessionStore (SQLite + AES-256-GCM at rest)', () => {
-  it('creates the data key in the CredentialStore on first open', async () => {
+  it('creates the data key in the CredentialStore on first open', () => {
     const creds = new InMemoryCredentialStore();
-    expect(await creds.has(SESSION_DATA_KEY_ID)).toBe(false);
-    const store = await SessionStore.open(creds, dbPath);
-    expect(await creds.has(SESSION_DATA_KEY_ID)).toBe(true);
+    expect(creds.getSync(SESSION_DATA_KEY_ID)).toBeNull();
+    const store = openStore(creds, dbPath);
+    expect(creds.getSync(SESSION_DATA_KEY_ID)).toBeTruthy();
     store.close();
   });
 
-  it('round-trips sessions, transcript, and token ledger', async () => {
+  it('round-trips sessions, transcript, and token ledger', () => {
     const creds = new InMemoryCredentialStore();
-    const store = await SessionStore.open(creds, path.join(tmp, 'crud.db'));
+    const store = openStore(creds, path.join(tmp, 'crud.db'));
 
     const s = store.createSession('งานแข่ง thcode', 'D:\\Projects\\Active\\TH_CODE');
     expect(store.getSession(s.id)?.name).toBe('งานแข่ง thcode');
@@ -47,10 +53,10 @@ describe('SessionStore (SQLite + AES-256-GCM at rest)', () => {
     store.close();
   });
 
-  it('never stores plaintext sensitive content in the database file', async () => {
+  it('never stores plaintext sensitive content in the database file', () => {
     const creds = new InMemoryCredentialStore();
     const file = path.join(tmp, 'privacy.db');
-    const store = await SessionStore.open(creds, file);
+    const store = openStore(creds, file);
     const s = store.createSession('SECRET-NAME-MARKER', 'D:\\SECRET-PATH-MARKER');
     store.appendTranscript(s.id, 'user', 'SECRET-CONTENT-MARKER');
     store.close();

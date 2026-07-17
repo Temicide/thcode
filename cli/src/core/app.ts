@@ -11,6 +11,7 @@ import { createCredentialStore, type CredentialStore } from './platform/index.js
 import { createDefaultProviderRegistry, ProviderRegistry } from './providers/registry.js';
 import type { NormalizedMessage } from './providers/types.js';
 import { createDefaultToolRegistry, type ToolRegistry } from './tools/registry.js';
+import { assertCompatibleVersion, PROTOCOL_MAJOR } from './protocol/coreProtocol.js';
 
 export interface CoreStatus {
   readonly mode: WorkMode;
@@ -40,6 +41,9 @@ export class CoreApp {
   private readonly loop: AgentLoop;
 
   constructor(opts: CoreAppOptions = {}) {
+    // Fail-closed startup: incompatible protocol major version throws before
+    // any state is constructed (AD-2).
+    assertCompatibleVersion(PROTOCOL_MAJOR);
     this.workspaceRoot = opts.workspaceRoot ?? process.cwd();
     this.credentials = opts.credentials ?? createCredentialStore();
     this.providers = opts.providers ?? createDefaultProviderRegistry();

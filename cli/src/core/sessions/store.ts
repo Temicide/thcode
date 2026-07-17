@@ -12,19 +12,8 @@ import {
   workspaceBindingIndex,
   type EncryptedField,
 } from './crypto.js';
-
-// Global Session Store (ADR 0017): one machine-local SQLite database under
-// %LOCALAPPDATA%\thcode, scoped to the OS user, browsable from any directory.
-// Sensitive columns (session name, workspace path, transcript content) are
-// AES-256-GCM encrypted (ADR 0018) with a per-install data key held in the
-// CredentialStore — the key is NEVER a database field. Only opaque ids, schema
-// versions, and operational timestamps remain plaintext.
-//
-// This is a scaffold-level implementation: schema + encrypt/decrypt helpers +
-// basic CRUD. Deferred to later phases (extension points, do not build here):
-// - session browser UX (ADR 0016/0017)          -> src/core/sessions/browser.ts (TODO)
-// - compaction records / pins (ADR 0014)        -> transcript schema will grow
-// - export/import/recovery archives (Phase 2)
+import { STORE_FORMAT_VERSION } from './formatVersion.js';
+import { JOURNAL_DDL } from './journal.js';
 
 const SCHEMA_VERSION = 1;
 
@@ -56,6 +45,10 @@ export interface TokenLedgerEntry {
   readonly createdAt: string;
 }
 
+export type StoreOpenResult =
+  | { ok: true; store: SessionStore }
+  | { ok: false; mode: 'migration-failed' | 'recovery-locked'; cause: string };
+
 function enc(field: EncryptedField): string {
   return JSON.stringify(field);
 }
@@ -65,29 +58,65 @@ function dec(json: string): EncryptedField {
 
 export class SessionStore {
   private constructor(
-    private readonly db: Database.Database,
+    private readonly _db: Database.Database,
     private readonly dataKey: Buffer,
   ) {}
 
-  /**
-   * Open (creating if needed) the Global Session Store. The per-install data
-   * key is fetched from the CredentialStore; when absent, a fresh key is
-   * generated and stored there. Losing that key makes encrypted content
-   * unrecoverable (ADR 0018) — the CLI must disclose this, not imply backup.
-   */
+  /** Expose the raw database handle for the journal repository. */
+  db(): Database.Database {
+    return this._db;
+  }
+
+  /** Read a meta value by key. */
+  meta(key: string): string | undefined {
+    const row = this._db.prepare('SELECT v FROM meta WHERE k = ?').get(key) as
+      | { v: string }
+      | undefined;
+    return row?.v;
+  }
+
+  /** Write a meta value. */
+  setMeta(key: string, value: string): void {
+    this._db.prepare('INSERT OR REPLACE INTO meta (k, v) VALUES (?, ?)').run(key, value);
+  }
+
   static async open(
     credentials: CredentialStore,
     dbPath: string = sessionsDbPath(),
-  ): Promise<SessionStore> {
+  ): Promise<StoreOpenResult> {
+    return SessionStore._open(credentials, dbPath, true);
+  }
+
+  /** Synchronous open for tests (InMemoryCredentialStore is sync-safe). */
+  static openSync(
+    credentials: CredentialStore,
+    dbPath: string,
+  ): StoreOpenResult {
+    return SessionStore._open(credentials, dbPath, false);
+  }
+
+  private static _open(
+    credentials: CredentialStore,
+    dbPath: string,
+    _async: boolean,
+  ): StoreOpenResult {
     mkdirSync(path.dirname(dbPath), { recursive: true });
 
-    let keyB64 = await credentials.get(SESSION_DATA_KEY_ID);
-    if (!keyB64) {
+    const keyB64 = (credentials as unknown as { getSync?: (id: string) => string | null }).getSync
+      ? (credentials as unknown as { getSync: (id: string) => string | null }).getSync!(SESSION_DATA_KEY_ID)
+      : null;
+
+    let finalKeyB64: string;
+    if (keyB64) {
+      finalKeyB64 = keyB64;
+    } else {
       const fresh = generateDataKey();
-      keyB64 = fresh.toString('base64');
-      await credentials.set(SESSION_DATA_KEY_ID, keyB64);
+      finalKeyB64 = fresh.toString('base64');
+      if ((credentials as unknown as { setSync?: (id: string, secret: string) => void }).setSync) {
+        (credentials as unknown as { setSync: (id: string, secret: string) => void }).setSync!(SESSION_DATA_KEY_ID, finalKeyB64);
+      }
     }
-    const key = Buffer.from(keyB64, 'base64');
+    const key = Buffer.from(finalKeyB64, 'base64');
 
     const db = new Database(dbPath);
     db.pragma('journal_mode = WAL');
@@ -99,9 +128,9 @@ export class SessionStore {
       CREATE TABLE IF NOT EXISTS sessions (
         id TEXT PRIMARY KEY,
         schema_version INTEGER NOT NULL,
-        name_enc TEXT NOT NULL,            -- encrypted session name (ADR 0018)
-        workspace_enc TEXT NOT NULL,       -- encrypted Workspace Binding path
-        workspace_index TEXT NOT NULL,     -- keyed non-reversible equality index
+        name_enc TEXT NOT NULL,
+        workspace_enc TEXT NOT NULL,
+        workspace_index TEXT NOT NULL,
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL
       );
@@ -111,7 +140,7 @@ export class SessionStore {
         session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
         seq INTEGER NOT NULL,
         role TEXT NOT NULL,
-        content_enc TEXT NOT NULL,         -- encrypted turn content (ADR 0018)
+        content_enc TEXT NOT NULL,
         created_at TEXT NOT NULL
       );
       CREATE INDEX IF NOT EXISTS idx_transcript_session ON transcript_entries(session_id, seq);
@@ -125,17 +154,39 @@ export class SessionStore {
         created_at TEXT NOT NULL
       );
     `);
+    db.exec(JOURNAL_DDL);
+
     db.prepare('INSERT OR IGNORE INTO meta (k, v) VALUES (?, ?)').run(
       'schema_version',
       String(SCHEMA_VERSION),
     );
-    return new SessionStore(db, key);
+
+    const existingFormat = db.prepare('SELECT v FROM meta WHERE k = ?').get('format_version') as
+      | { v: string }
+      | undefined;
+    if (existingFormat) {
+      const existing = Number.parseInt(existingFormat.v, 10);
+      if (Number.isNaN(existing) || existing > STORE_FORMAT_VERSION) {
+        db.close();
+        return {
+          ok: false,
+          mode: 'migration-failed',
+          cause: `Store format version ${existingFormat.v} is newer than current ${STORE_FORMAT_VERSION}`,
+        };
+      }
+    }
+    db.prepare('INSERT OR REPLACE INTO meta (k, v) VALUES (?, ?)').run(
+      'format_version',
+      String(STORE_FORMAT_VERSION),
+    );
+
+    return { ok: true, store: new SessionStore(db, key) };
   }
 
   createSession(name: string, workspacePath: string): SessionRecord {
     const id = randomUUID();
     const now = new Date().toISOString();
-    this.db
+    this._db
       .prepare(
         `INSERT INTO sessions (id, schema_version, name_enc, workspace_enc, workspace_index, created_at, updated_at)
          VALUES (?, ?, ?, ?, ?, ?, ?)`,
@@ -153,41 +204,41 @@ export class SessionStore {
   }
 
   getSession(id: string): SessionRecord | undefined {
-    const row = this.db.prepare('SELECT * FROM sessions WHERE id = ?').get(id) as
+    const row = this._db.prepare('SELECT * FROM sessions WHERE id = ?').get(id) as
       | Record<string, string>
       | undefined;
     if (!row) return undefined;
     return this.decodeSession(row);
   }
 
-  /** Equality-filter by Workspace Binding without exposing the plaintext path. */
   listSessionsForWorkspace(workspacePath: string): SessionRecord[] {
-    const rows = this.db
+    const rows = this._db
       .prepare('SELECT * FROM sessions WHERE workspace_index = ? ORDER BY updated_at DESC')
       .all(workspaceBindingIndex(workspacePath, this.dataKey)) as Record<string, string>[];
     return rows.map((r) => this.decodeSession(r));
   }
 
   listSessions(): SessionRecord[] {
-    const rows = this.db
+    const rows = this._db
       .prepare('SELECT * FROM sessions ORDER BY updated_at DESC')
       .all() as Record<string, string>[];
     return rows.map((r) => this.decodeSession(r));
   }
 
   deleteSession(id: string): void {
-    this.db.prepare('DELETE FROM transcript_entries WHERE session_id = ?').run(id);
-    this.db.prepare('DELETE FROM token_ledger WHERE session_id = ?').run(id);
-    this.db.prepare('DELETE FROM sessions WHERE id = ?').run(id);
+    this._db.prepare('DELETE FROM transcript_entries WHERE session_id = ?').run(id);
+    this._db.prepare('DELETE FROM token_ledger WHERE session_id = ?').run(id);
+    this._db.prepare('DELETE FROM journal WHERE session_id = ?').run(id);
+    this._db.prepare('DELETE FROM sessions WHERE id = ?').run(id);
   }
 
   appendTranscript(sessionId: string, role: TranscriptRole, content: string): TranscriptEntry {
     const id = randomUUID();
     const now = new Date().toISOString();
-    const seqRow = this.db
+    const seqRow = this._db
       .prepare('SELECT COALESCE(MAX(seq), 0) + 1 AS next FROM transcript_entries WHERE session_id = ?')
       .get(sessionId) as { next: number };
-    this.db
+    this._db
       .prepare(
         `INSERT INTO transcript_entries (id, session_id, seq, role, content_enc, created_at)
          VALUES (?, ?, ?, ?, ?, ?)`,
@@ -200,12 +251,12 @@ export class SessionStore {
         enc(encryptField(content, this.dataKey, `transcript:${id}`)),
         now,
       );
-    this.db.prepare('UPDATE sessions SET updated_at = ? WHERE id = ?').run(now, sessionId);
+    this._db.prepare('UPDATE sessions SET updated_at = ? WHERE id = ?').run(now, sessionId);
     return { id, sessionId, seq: seqRow.next, role, content, createdAt: now };
   }
 
   getTranscript(sessionId: string): TranscriptEntry[] {
-    const rows = this.db
+    const rows = this._db
       .prepare('SELECT * FROM transcript_entries WHERE session_id = ? ORDER BY seq ASC')
       .all(sessionId) as Record<string, string | number>[];
     return rows.map((r) => ({
@@ -219,7 +270,7 @@ export class SessionStore {
   }
 
   recordTokens(entry: Omit<TokenLedgerEntry, 'createdAt'>): void {
-    this.db
+    this._db
       .prepare(
         `INSERT INTO token_ledger (session_id, input_tokens, output_tokens, cached_tokens, model_id, created_at)
          VALUES (?, ?, ?, ?, ?, ?)`,
@@ -234,9 +285,8 @@ export class SessionStore {
       );
   }
 
-  /** Cumulative Token Usage (ADR 0015 — distinct from context utilization). */
   tokenTotals(sessionId: string): { input: number; output: number; cached: number } {
-    const row = this.db
+    const row = this._db
       .prepare(
         `SELECT COALESCE(SUM(input_tokens),0) AS i, COALESCE(SUM(output_tokens),0) AS o, COALESCE(SUM(cached_tokens),0) AS c
          FROM token_ledger WHERE session_id = ?`,
@@ -246,7 +296,7 @@ export class SessionStore {
   }
 
   close(): void {
-    this.db.close();
+    this._db.close();
   }
 
   private decodeSession(row: Record<string, string>): SessionRecord {

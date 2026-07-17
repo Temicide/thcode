@@ -20,7 +20,17 @@ export interface CredentialStore {
   delete(id: CredentialId): Promise<void>;
   /** True if a secret is stored for `id`. */
   has(id: CredentialId): Promise<boolean>;
+  /** Non-mutating availability probe (preflight). Returns the backing kind
+   * without reading or writing any secret. Implementations SHOULD return
+   * 'unknown' rather than throwing when the probe cannot be satisfied. */
+  availability?(): CredentialStoreAvailability;
 }
+
+/** Result of a non-mutating credential-store availability probe. */
+export type CredentialStoreAvailability =
+  | { kind: 'ok'; backend: 'windows-dpapi' | 'macos-keychain' | 'linux-secret-service' | 'in-memory' }
+  | { kind: 'unavailable'; reason: string }
+  | { kind: 'unknown'; reason: string };
 
 /**
  * In-memory CredentialStore for tests and non-persistent runs. Never touches
@@ -28,11 +38,22 @@ export interface CredentialStore {
  */
 export class InMemoryCredentialStore implements CredentialStore {
   private readonly map = new Map<CredentialId, string>();
+  private _getCount = 0;
 
   async get(id: CredentialId): Promise<string | null> {
-    return this.map.has(id) ? this.map.get(id)! : null;
+    this._getCount += 1;
+    return this.map.has(id) ? (this.map.get(id) as string) : null;
+  }
+  /** Synchronous get for test affordance (SessionStore.openSync). */
+  getSync(id: CredentialId): string | null {
+    this._getCount += 1;
+    return this.map.has(id) ? (this.map.get(id) as string) : null;
   }
   async set(id: CredentialId, secret: string): Promise<void> {
+    this.map.set(id, secret);
+  }
+  /** Synchronous set for test affordance. */
+  setSync(id: CredentialId, secret: string): void {
     this.map.set(id, secret);
   }
   async delete(id: CredentialId): Promise<void> {
@@ -40,5 +61,11 @@ export class InMemoryCredentialStore implements CredentialStore {
   }
   async has(id: CredentialId): Promise<boolean> {
     return this.map.has(id);
+  }
+  availability(): CredentialStoreAvailability {
+    return { kind: 'unavailable', reason: 'in-memory only; not durable' };
+  }
+  getCallCount(): number {
+    return this._getCount;
   }
 }

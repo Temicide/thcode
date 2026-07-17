@@ -1,6 +1,9 @@
 #!/usr/bin/env node
 // thcode entry point. --version / --help are a fast path that never imports
 // Ink or React, so they work in CI and non-TTY environments (requirement 12).
+// A startup preflight gate (Story 1.1) runs after the fast path and before
+// `main()`; on a blocked/unknown result it emits a typed record and exits
+// without ever importing Ink.
 
 import { createRequire } from 'node:module';
 
@@ -41,6 +44,37 @@ if (args.includes('--help') || args.includes('-h')) {
   process.exit(0);
 }
 
+// Preflight gate: runs before any Ink import (AD-23, UX-DR-098–100). A
+// blocked/unknown result exits the process here; the supported path falls
+// through to `main()` below.
+async function preflight(): Promise<void> {
+  const [{ createCredentialStore }, { runtimeEnvFromProcess, runPreflight }] = await Promise.all([
+    import('./core/platform/index.js'),
+    import('./core/preflight/run.js'),
+  ]);
+  const env = runtimeEnvFromProcess(createCredentialStore());
+  const result = runPreflight(env);
+  if (result.status === 'supported') {
+    // One-line safe summary to stdout (UX-DR-099). No secrets, no diagnostics.
+    console.log(`thcode: ${result.message}`);
+    return;
+  }
+  // Blocked / unknown: safe summary to stdout, typed diagnostics to stderr,
+  // then exit with the canonical code. NEVER import Ink on this path.
+  console.log(`thcode: ${result.message}`);
+  console.error(`cause: ${result.cause}`);
+  console.error(`recovery: ${result.recovery}`);
+  console.error(
+    `platform=${result.platform} shell=${result.shell} node=${result.nodeVersion ?? 'unknown'} mode=${result.outputMode}`,
+  );
+  process.exit(result.exitCode);
+}
+
+void preflight().then(main).catch((err) => {
+  console.error(`thcode failed to start: ${(err as Error).message}`);
+  process.exit(1);
+});
+
 // Interactive path: import Ink lazily so the fast path above stays raw-mode free.
 async function main(): Promise<void> {
   const [{ render }, React, { App }, { CoreApp }] = await Promise.all([
@@ -54,8 +88,3 @@ async function main(): Promise<void> {
   const instance = render(React.createElement(App, { core }), { exitOnCtrlC: true });
   await instance.waitUntilExit();
 }
-
-main().catch((err) => {
-  console.error(`thcode failed to start: ${(err as Error).message}`);
-  process.exit(1);
-});
