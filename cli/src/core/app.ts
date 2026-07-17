@@ -132,6 +132,8 @@ import {
   type CommandExecutionResult,
   type CommandExecutionContext,
 } from './commands/index.js';
+import { runDependencyPreflight, defaultEnvironmentProbe } from './depPreflight/run.js';
+import type { DepPreflightResult } from './depPreflight/types.js';
 import { sanitizer } from './security/sanitizer.js';
 
 export interface CoreStatus {
@@ -1123,6 +1125,17 @@ export class CoreApp {
     });
   }
 
+  /** Story 3.8 AC #1–5: run a non-mutating dependency preflight. Inspects
+   * bounded project metadata + verified documentation, probes ONLY approved
+   * runtimes/compilers/package-managers/documented commands, and records
+   * platform, version, executable identity, probe output classification, and
+   * evidence WITHOUT installing or modifying anything. Each call produces a
+   * FRESH Evidence identity (AC #4). Remains read-only regardless of mode/
+   * profile/TTY (AC #5). */
+  runCheck(): DepPreflightResult {
+    return runDependencyPreflight(this.workspace, defaultEnvironmentProbe(), this.clock);
+  }
+
   /** Story 3.7 AC #1, AC #2: validate a controlled command proposal. Resolves
    * approved executable identity, validates explicit argv vector, Workspace-
    * contained cwd, allowed environment names/values, shell/startup-hook policy,
@@ -1251,8 +1264,11 @@ export class CoreApp {
         // Epic 4 Capability Registry or Specialist services; Catalogued entries
         // are not made invokable.
         return renderCommandOutput({ status: 'succeeded', body: this.listCatalog().join('\n'), nextStep: 'continue' });
-      case 'check':
-        return renderCommandOutput({ status: 'succeeded', body: 'dependency preflight is a non-mutating probe (Epic 3 surface)', nextStep: 'continue' });
+      case 'check': {
+        const result = this.runCheck();
+        const status = result.overall === 'all-verified' ? 'succeeded' : 'blocked';
+        return renderCommandOutput({ status, body: JSON.stringify(result, null, 2), nextStep: 'continue' });
+      }
       case 'help':
         return renderCommandOutput({ status: 'succeeded', body: COMMAND_GRAMMAR.map((c) => `/${c.command}${c.aliases.length ? ` (${c.aliases.map((a) => `/${a}`).join(', ')})` : ''} — ${c.description}`).join('\n'), nextStep: 'continue' });
     }
