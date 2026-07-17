@@ -32,6 +32,7 @@ import type {
   RevalidationContext,
 } from './agent/types.js';
 import { ToolCatalog } from './catalog/loader.js';
+import { CapabilityRegistry } from './specialists/registry/index.js';
 import {
   contextUtilizationPercentOrUnavailable,
   effectiveContextCapacityOrUnavailable,
@@ -1396,6 +1397,15 @@ export class CoreApp {
       lines.push(`${marker} ${a.capabilities.provider} (${a.capabilities.modelId}): ${state}`);
     }
     return lines;
+  }
+
+  /** Story 4.1: access the loaded Capability Registry. */
+  private _capabilityRegistry: CapabilityRegistry | null = null;
+  capabilityRegistry(now?: string): CapabilityRegistry {
+    if (!this._capabilityRegistry) {
+      this._capabilityRegistry = CapabilityRegistry.load(now ?? this.clock());
+    }
+    return this._capabilityRegistry;
   }
 
   /** `/tools` view of the Catalog Manifest (ADR 0011). */
