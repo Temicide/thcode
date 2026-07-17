@@ -64,6 +64,8 @@ export interface CheckpointRecord {
   readonly integrityState: IntegrityState;
   readonly stageState: StageState;
   readonly createdAt: string;
+  /** Prompt Round at which this checkpoint was created (Story 3.16 retention). */
+  readonly promptRound?: number;
 }
 
 // --- ArtifactRecord (ArtifactStore-owned) ---
@@ -84,6 +86,8 @@ export interface CheckpointStageInput {
   readonly artifactIds: readonly ArtifactId[];
   readonly parentCheckpointIds?: readonly CheckpointId[];
   readonly coverageState?: CoverageState;
+  /** Prompt Round at which this checkpoint is created (Story 3.16 retention). */
+  readonly promptRound?: number;
 }
 
 // --- Stage input for ArtifactStore ---

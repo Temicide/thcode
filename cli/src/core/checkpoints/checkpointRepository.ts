@@ -81,6 +81,7 @@ export class CheckpointRepository {
         integrityState: 'verified',
         stageState: 'staging',
         createdAt: now,
+        promptRound: input.promptRound,
       };
 
       this.store.put(checkpointRecordKey(checkpointId), JSON.stringify(record));

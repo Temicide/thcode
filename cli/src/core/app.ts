@@ -182,6 +182,18 @@ import type {
 } from './rollback/types.js';
 import { asCheckpointId } from './checkpoints/types.js';
 import {
+  calculateRetention,
+  evaluateCapacity,
+  runCleanup,
+  renderRetentionStatusOutput,
+  renderCapacityUsageOutput,
+  renderCleanupOutcomeOutput,
+  type RetentionConfig,
+  type RetentionState,
+  type CapacityUsage,
+  type CleanupContext,
+} from './retention/index.js';
+import {
   classify,
   reconcileOperation,
   buildRecoveryResult,
@@ -1783,6 +1795,136 @@ export class CoreApp {
     };
 
     return applyRollback(checkpointId, selectedTargets, ctx);
+  }
+
+  // --- Story 3.16: Retention, capacity, and cleanup ---
+
+  /**
+   * Get retention status for a checkpoint (Story 3.16 AC #1, AC #6).
+   * Shows encryption/integrity status, age/window, cap usage, exclusions,
+   * and exact next steps.
+   */
+  retentionStatus(
+    checkpointId: string,
+    opts: {
+      kvStore?: KeyValueStore;
+      blobStore?: BlobStore;
+      encKey?: Buffer;
+      config?: RetentionConfig;
+      currentPromptRound?: number;
+    } = {},
+  ): CommandOutput {
+    const kvStore = opts.kvStore;
+    if (!kvStore) {
+      return renderCommandOutput({ status: 'blocked', cause: 'no key-value store available for retention status', nextStep: 'ensure a store is configured' });
+    }
+
+    const recordKey = `checkpoint:record:${checkpointId}`;
+    const recordJson = kvStore.get(recordKey);
+    if (!recordJson) {
+      return renderCommandOutput({ status: 'blocked', cause: `checkpoint not found: ${checkpointId}`, nextStep: 'verify the checkpoint id and retry' });
+    }
+
+    let record: { checkpointId: string; createdAt: string; integrityState: string; artifactIds?: readonly string[]; promptRound?: number; retentionState: string };
+    try {
+      record = JSON.parse(recordJson);
+    } catch {
+      return renderCommandOutput({ status: 'blocked', cause: `checkpoint record is corrupt: ${checkpointId}`, nextStep: 'inspect the checkpoint store' });
+    }
+
+    const now = this.clock();
+    const ageMs = Math.max(0, new Date(now).getTime() - new Date(record.createdAt).getTime());
+    const promptRound = record.promptRound ?? 0;
+    const currentPromptRound = opts.currentPromptRound ?? promptRound + 1;
+
+    const retentionState: RetentionState = calculateRetention(
+      asCheckpointId(checkpointId),
+      promptRound,
+      currentPromptRound,
+      opts.config,
+    );
+
+    const encryptionState: 'encrypted' | 'unencrypted' = record.artifactIds && record.artifactIds.length > 0 ? 'encrypted' : 'unencrypted';
+
+    const status = {
+      checkpointId: asCheckpointId(checkpointId),
+      encryptionState,
+      integrityState: record.integrityState,
+      ageMs,
+      retentionWindow: retentionState.config.subsequentPromptRounds,
+      expiryPromptRound: retentionState.retained ? retentionState.expiryPromptRound : null,
+      capUsage: null as CapacityUsage | null,
+      exclusions: [] as readonly string[],
+      nextSteps: retentionState.retained
+        ? ['checkpoint is retained', 'use /rollback inspect for details']
+        : ['checkpoint has expired', 'cleanup will remove its data'],
+    };
+
+    return renderRetentionStatusOutput(status);
+  }
+
+  /**
+   * Evaluate capacity for a proposed checkpoint (Story 3.16 AC #2).
+   * Reports over-cap with exact usage and unprotected scope.
+   * Full Access cannot suppress this disclosure.
+   */
+  evaluateCapacity(
+    proposedCheckpointSize: number,
+    targetPaths: readonly string[],
+    opts: { currentStoreUsageBytes?: number } = {},
+  ): CommandOutput {
+    const currentUsage = opts.currentStoreUsageBytes ?? 0;
+    const result = evaluateCapacity(proposedCheckpointSize, currentUsage, targetPaths);
+
+    if (result.ok) {
+      return renderCapacityUsageOutput(result.usage);
+    }
+
+    // Over-cap: render the full disclosure.
+    return renderCapacityUsageOutput(result.usage);
+  }
+
+  /**
+   * Run cleanup for a checkpoint (Story 3.16 AC #4, AC #5).
+   * Removes encrypted originals, metadata, staging files, and unreachable
+   * references through a journaled crash-consistent lifecycle.
+   */
+  runCleanup(
+    checkpointId: string,
+    opts: {
+      kvStore?: KeyValueStore;
+      blobStore?: BlobStore;
+      storeLocked?: () => boolean;
+      keyLocked?: () => boolean;
+    } = {},
+  ): CommandOutput {
+    const kvStore = opts.kvStore;
+    const blobStore = opts.blobStore;
+    if (!kvStore || !blobStore) {
+      return renderCommandOutput({ status: 'blocked', cause: 'no stores available for cleanup', nextStep: 'ensure stores are configured' });
+    }
+
+    const ctx: CleanupContext = {
+      clock: this.clock,
+      journal: { append: () => {} },
+      kvStore: {
+        get: (k: string) => kvStore.get(k),
+        put: (k: string, v: string) => kvStore.put(k, v),
+        delete: (k: string) => kvStore.delete(k),
+        list: (prefix: string) => kvStore.list(prefix),
+      },
+      blobStore: {
+        get: (k: string) => blobStore.get(k),
+        put: (k: string, v: Uint8Array) => blobStore.put(k, v),
+        delete: (k: string) => blobStore.delete(k),
+        list: (prefix: string) => blobStore.list(prefix),
+      },
+      storeLocked: opts.storeLocked ?? (() => false),
+      keyLocked: opts.keyLocked ?? (() => false),
+    };
+
+    const outcome = runCleanup(asCheckpointId(checkpointId), ctx);
+    return renderCleanupOutcomeOutput(outcome);
   }
 
   // --- Story 3.9: Agent Loop hardening ---
