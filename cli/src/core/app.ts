@@ -84,6 +84,21 @@ import type {
   PlanMutationResult,
   PreflightResult,
 } from './mutations/index.js';
+import {
+  inspectList,
+  inspectRead,
+  inspectSearch,
+  evaluateInspectionPolicy,
+  policyDecisionToRefusal,
+  defaultInspectionFsProbe,
+} from './inspection/index.js';
+import type {
+  InspectionLimits,
+  InspectionRefusal,
+  ListResult,
+  ReadResult,
+  SearchResult,
+} from './inspection/index.js';
 import type {
   AuthorityProjection,
   ConversationProjection,
@@ -656,6 +671,76 @@ export class CoreApp {
     return checkContainment(this.workspace, target, {
       fsProbe: defaultFsProbe(),
       followSymlinks: opts.followSymlinks,
+    });
+  }
+
+  /** Story 3.4 AC #1, AC #4, AC #5: bounded directory listing through PEP
+   * mediation. Resolves + revalidates every resource identity, stays within
+   * Workspace, no-follow, bounds recursion + file count, returns sanitized
+   * entries with path/type/size/digest metadata. Manual eligible non-transferring
+   * inspection proceeds without interruption. Plan mode stays read-only. */
+  inspectList(
+    path: string,
+    opts: { limits?: InspectionLimits; computeDigests?: boolean } = {},
+  ): ListResult | InspectionRefusal {
+    const a = this.activation.snapshot();
+    const policy = evaluateInspectionPolicy({
+      actionClass: 'list_dir',
+      state: { mode: a.mode, profile: a.profile, sensitiveOverride: a.sensitiveTransferOverride },
+    });
+    if (policy.outcome !== 'allow') {
+      return policyDecisionToRefusal(policy, 'list_dir');
+    }
+    return inspectList(this.workspace, path, {
+      fsProbe: defaultInspectionFsProbe(),
+      limits: opts.limits,
+      computeDigests: opts.computeDigests,
+    });
+  }
+
+  /** Story 3.4 AC #1, AC #3, AC #4, AC #5: bounded file read through PEP
+   * mediation. Revalidates identity, no-follow + file-size limit, detects
+   * binary/hostile/over-limit/malformed-UTF-8/active-external-references,
+   * returns bounded metadata or typed refusal, preserves valid Thai UTF-8 +
+   * technical identifiers. */
+  inspectRead(
+    path: string,
+    opts: { limits?: InspectionLimits } = {},
+  ): ReadResult | InspectionRefusal {
+    const a = this.activation.snapshot();
+    const policy = evaluateInspectionPolicy({
+      actionClass: 'read_file',
+      state: { mode: a.mode, profile: a.profile, sensitiveOverride: a.sensitiveTransferOverride },
+    });
+    if (policy.outcome !== 'allow') {
+      return policyDecisionToRefusal(policy, 'read_file');
+    }
+    return inspectRead(this.workspace, path, {
+      fsProbe: defaultInspectionFsProbe(),
+      limits: opts.limits,
+    });
+  }
+
+  /** Story 3.4 AC #1, AC #3, AC #4, AC #5: bounded text search through PEP
+   * mediation. Revalidates identity, bounds search work + file count + text
+   * bytes, no-follow, sanitized matches with metadata. Same binary/hostile/
+   * malformed-utf8 handling as read. */
+  inspectSearch(
+    query: string,
+    path: string,
+    opts: { limits?: InspectionLimits } = {},
+  ): SearchResult | InspectionRefusal {
+    const a = this.activation.snapshot();
+    const policy = evaluateInspectionPolicy({
+      actionClass: 'search',
+      state: { mode: a.mode, profile: a.profile, sensitiveOverride: a.sensitiveTransferOverride },
+    });
+    if (policy.outcome !== 'allow') {
+      return policyDecisionToRefusal(policy, 'search');
+    }
+    return inspectSearch(this.workspace, query, path, {
+      fsProbe: defaultInspectionFsProbe(),
+      limits: opts.limits,
     });
   }
 
