@@ -5,6 +5,22 @@
 
 import { AgentLoop, type ApprovalCallback } from './agent/loop.js';
 import { dispatchTyphoonTurn, durableEvent } from './agent/dispatch.js';
+import { validateProposal } from './agent/validation.js';
+import type { ValidationDeps } from './agent/validation.js';
+import { mediateToolResult } from './agent/toolResultMediation.js';
+import type { MediationDeps } from './agent/toolResultMediation.js';
+import { handleLifecycleStep } from './agent/lifecycle.js';
+import type { LifecycleDeps } from './agent/lifecycle.js';
+import type {
+  ProposalToValidate,
+  ProposalValidationResult,
+  MediatedToolResult,
+  ToolResultToMediate,
+  LoopTerminal,
+  ValidationContext,
+  MediationContext,
+  LifecycleContext,
+} from './agent/types.js';
 import { ToolCatalog } from './catalog/loader.js';
 import {
   contextUtilizationPercentOrUnavailable,
@@ -1329,6 +1345,91 @@ export class CoreApp {
       this.history.reduce((n, m) => n + m.content.length, 0) / 4,
     );
     return result.text;
+  }
+
+  // --- Story 3.9: Agent Loop hardening ---
+
+  /**
+   * Validate a proposal comprehensively before any tool or process adapter
+   * receives it (Story 3.9 AC #1, AC #2). Checks schema, action class, Work
+   * Mode, Permission Profile, Workspace/resource identity, consent, quota,
+   * credentials, and hard boundaries. Returns a typed result with sanitized
+   * Evidence. Performs NO repair, reinterpretation, substitution, or retry
+   * (AD-14). Leaves NO authorization or staged effect.
+   */
+  validateProposal(proposal: ProposalToValidate): ProposalValidationResult {
+    const a = this.activation.snapshot();
+    const ctx: ValidationContext = {
+      mode: a.mode,
+      profile: a.profile,
+      workspace: this.workspace,
+      activationRevision: a.revision,
+      authorityRevision: a.revision,
+      matrixVersion: 1,
+      policyVersion: 1,
+      clock: this.clock,
+    };
+    const deps: ValidationDeps = {
+      lookupActionClass: (ac) => {
+        // eslint-disable-next-line @typescript-eslint/no-require-imports
+        const { lookupActionClass } = require('./permissions/matrix.js') as typeof import('./permissions/matrix.js');
+        return lookupActionClass(ac);
+      },
+      evaluatePermission: (action, state) => {
+        // eslint-disable-next-line @typescript-eslint/no-require-imports
+        const { evaluatePermission } = require('./permissions/policy.js') as typeof import('./permissions/policy.js');
+        return evaluatePermission(action, state);
+      },
+      checkHardBoundary: (input) => {
+        // eslint-disable-next-line @typescript-eslint/no-require-imports
+        const { checkHardBoundary } = require('./permissions/boundary.js') as typeof import('./permissions/boundary.js');
+        return checkHardBoundary(input);
+      },
+      sanitizer,
+    };
+    return validateProposal(proposal, ctx, deps);
+  }
+
+  /**
+   * Mediate a tool result before it is offered as context for another proposal
+   * (Story 3.9 AC #3). Source-labels, sanitizes, bounds, and durably records
+   * the result. Remote/tool output CANNOT change policy, permissions,
+   * boundaries, registry authority, or task scope.
+   */
+  mediateToolResult(result: ToolResultToMediate): MediatedToolResult {
+    const a = this.activation.snapshot();
+    const ctx: MediationContext = {
+      workspace: this.workspace,
+      activationRevision: a.revision,
+      authorityRevision: a.revision,
+      matrixVersion: 1,
+      policyVersion: 1,
+      clock: this.clock,
+      maxResultBytes: 1024 * 1024, // 1 MB
+    };
+    const deps: MediationDeps = { sanitizer };
+    return mediateToolResult(result, ctx, deps);
+  }
+
+  /**
+   * Handle a lifecycle step for the Agent Loop (Story 3.9 AC #5). When the
+   * loop has no valid next proposal or receives an invalid terminal response,
+   * this produces a durable typed result that STOPS the loop. Does NOT invent
+   * a final answer, silently repair the proposal, or dispatch an unvalidated
+   * effect.
+   */
+  loopStep(hasValidNext: boolean, terminalResponse: string | null): LoopTerminal {
+    const a = this.activation.snapshot();
+    const ctx: LifecycleContext = {
+      clock: this.clock,
+      workspace: this.workspace,
+      activationRevision: a.revision,
+      authorityRevision: a.revision,
+      matrixVersion: 1,
+      policyVersion: 1,
+    };
+    const deps: LifecycleDeps = { sanitizer };
+    return handleLifecycleStep(hasValidNext, terminalResponse, ctx, deps);
   }
 
   /** Legacy Agent Loop entry retained for Epic 3 tool-call mediation. */
