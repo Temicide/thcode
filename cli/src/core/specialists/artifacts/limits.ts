@@ -48,6 +48,42 @@ export function parseTextLengthLimit(value: string): number | null {
 }
 
 /**
+ * Parse a resolution limit string into width and height. Accepts `WxH` format
+ * (e.g. `4000x4000`, `1920X1080`). Returns `null` when the value cannot be
+ * parsed.
+ */
+export function parseResolutionLimit(value: string): { width: number; height: number } | null {
+  const m = /^(\d+)\s*[xX]\s*(\d+)$/.exec(value.trim());
+  if (!m) return null;
+  const width = parseInt(m[1], 10);
+  const height = parseInt(m[2], 10);
+  if (isNaN(width) || isNaN(height) || width < 0 || height < 0) return null;
+  return { width, height };
+}
+
+/**
+ * Parse a duration limit string into seconds. Accepts:
+ * - Plain seconds: `30` → 30
+ * - With `s` suffix: `30s` → 30
+ * - With `m` suffix: `2m` → 120
+ * - With `h` suffix: `1h` → 3600
+ * Returns `null` when the value cannot be parsed.
+ */
+export function parseDurationLimit(value: string): number | null {
+  const m = /^(\d+(?:\.\d+)?)\s*(s|m|h)?$/i.exec(value.trim());
+  if (!m) return null;
+  const num = parseFloat(m[1]);
+  if (!isFinite(num) || num < 0) return null;
+  const unit = (m[2] ?? 's').toLowerCase();
+  switch (unit) {
+    case 's': return Math.round(num);
+    case 'm': return Math.round(num * 60);
+    case 'h': return Math.round(num * 3600);
+    default: return null;
+  }
+}
+
+/**
  * Check whether `sizeBytes` exceeds the limits defined in `inputLimits`.
  *
  * - When `kind` is `'file'`, checks against `maxFileSize`.

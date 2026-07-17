@@ -203,6 +203,8 @@ import {
 import {
   SpecialistArtifactResolver,
   type ArtifactResolutionResult,
+  type MinimizationResult,
+  minimizeArtifact,
 } from './specialists/artifacts/index.js';
 import {
   listCheckpoints,
@@ -1750,6 +1752,23 @@ export class CoreApp {
       ? this.capabilityRegistry().byId(serviceId) ?? undefined
       : undefined;
     return this._specialistArtifactResolver.resolveArtifact(reference, this.workspaceRoot, targetEntry);
+  }
+
+  /** Story 4.7: minimize a prepared artifact to fit within a target service's
+   * input limits. Uses the default minimizer registry (text/, image/, audio/)
+   * and the target entry from the Capability Registry when `serviceId` is
+   * provided. When omitted, passes through with no minimization.
+   *
+   * Returns a typed MinimizationResult — never throws for expected causes
+   * (minimization-unavailable, validation-failed, unsupported-type). */
+  minimizeSpecialistArtifact(
+    artifact: import('./specialists/artifacts/types.js').PreparedArtifact,
+    serviceId?: string,
+  ): MinimizationResult {
+    const targetEntry = serviceId
+      ? this.capabilityRegistry().byId(serviceId) ?? undefined
+      : undefined;
+    return minimizeArtifact(artifact, targetEntry, undefined, this.clock);
   }
 
   /** `/tools` view of the Catalog Manifest (ADR 0011). */

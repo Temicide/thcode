@@ -30,6 +30,8 @@ export {
 export {
   parseSizeLimit,
   parseTextLengthLimit,
+  parseResolutionLimit,
+  parseDurationLimit,
   checkSizeLimit,
 } from './limits.js';
 
@@ -37,3 +39,5 @@ export {
   createDefaultExtractorRegistry,
   decodeUtf8,
 } from './extractors.js';
+
+export * from './minimization/index.js';

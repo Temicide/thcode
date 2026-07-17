@@ -57,6 +57,10 @@ export interface PreparedArtifact {
   readonly privacyClassification: PrivacyClassification;
   /** Compatibility with the target service (unverified when no target). */
   readonly compatibility: ArtifactCompatibility;
+  /** SHA-256 hex digest of the content BEFORE minimization (present only when
+   * minimization has been applied). The main `contentHash` is always the hash
+   * of the content that will be transferred (post-minimization). */
+  readonly originalContentHash?: string;
   /** ISO-8601 timestamp of when this artifact was resolved. */
   readonly createdAt: string;
 }
