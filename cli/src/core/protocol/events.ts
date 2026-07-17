@@ -160,6 +160,57 @@ export interface BoundaryExpansionRevokedPayload {
   readonly reason: string;
 }
 
+// --- Story 2.4: exact-proposal authorization + revocation (AD-13, AD-17,
+// AD-18). An approval binds an unforgeable authorization to the exact
+// OperationId + digests + activation/authority revision + matrix version; a
+// replayed/duplicate approval event is deduplicated by EventId + authorization
+// identity and never double-consumed. No secrets or raw payloads (AD-24). */
+
+/** A bound one-shot authorization was granted for an exact proposal (Story 2.4
+ * AC #1). Carries only digests + identity/revision — never the raw proposal. */
+export interface ApprovalGrantedPayload {
+  readonly kind: 'ApprovalGranted';
+  readonly authorizationId: string;
+  readonly operationId: string;
+  readonly actionDigest: string;
+  readonly targetDigest: string | null;
+  readonly contextDigest: string | null;
+  readonly payloadDigest: string | null;
+  readonly destinationDigest: string | null;
+  readonly classification: string | null;
+  readonly credentialGroup: string | null;
+  readonly activationId: string;
+  readonly activationRevision: number;
+  readonly authorityRevision: number;
+  readonly policyOutcome: 'allow' | 'ask' | 'deny';
+  readonly matrixVersion: number;
+  readonly expiresAt: string | null;
+  readonly approvingInteraction: string;
+}
+
+/** A bound authorization was consumed by a dispatched effect (one-shot — Story
+ * 2.4 AC #1, AC #5). A replayed approval cannot consume it a second time. */
+export interface AuthorizationConsumedPayload {
+  readonly kind: 'AuthorizationConsumed';
+  readonly authorizationId: string;
+  readonly operationId: string;
+}
+
+/** A bound authorization was revoked or cancelled before dispatch commit
+ * (Story 2.4 AC #3). After dispatch commit, revocation is recorded with the
+ * honest `outcome` observed from durable Evidence rather than a cancellation
+ * fiction (AC #4). */
+export interface AuthorizationRevokedPayload {
+  readonly kind: 'AuthorizationRevoked';
+  readonly authorizationId: string;
+  readonly operationId: string;
+  readonly reason: string;
+  /** Honest post-revocation outcome. `cancelled` is only valid before dispatch
+   * commit; after commit the outcome is whatever durable Evidence proves
+   * (`succeeded`/`failed`/`unknown-outcome`/`still-running`). */
+  readonly outcome: 'cancelled' | 'failed' | 'succeeded' | 'unknown-outcome' | 'still-running';
+}
+
 export type DurableEventPayload =
   | PromptSubmittedPayload
   | ChatInterruptedPayload
@@ -178,7 +229,10 @@ export type DurableEventPayload =
   | AuthorityChangedPayload
   | PolicyDecisionRecordedPayload
   | BoundaryExpansionGrantedPayload
-  | BoundaryExpansionRevokedPayload;
+  | BoundaryExpansionRevokedPayload
+  | ApprovalGrantedPayload
+  | AuthorizationConsumedPayload
+  | AuthorizationRevokedPayload;
 
 export const DURABLE_EVENT_KINDS = [
   'PromptSubmitted', 'ChatInterrupted', 'RemoteOutputObserved', 'EffectDispatchCommitted',
@@ -186,6 +240,7 @@ export const DURABLE_EVENT_KINDS = [
   'OperationUnknownOutcome', 'HealthChanged', 'CapabilityChanged', 'EvidenceRecorded',
   'ContextCompacted', 'RuntimeActivationEstablished', 'AuthorityChanged',
   'PolicyDecisionRecorded', 'BoundaryExpansionGranted', 'BoundaryExpansionRevoked',
+  'ApprovalGranted', 'AuthorizationConsumed', 'AuthorizationRevoked',
 ] as const;
 
 export type DurableEventKind = (typeof DURABLE_EVENT_KINDS)[number];
@@ -220,4 +275,7 @@ export const _DURABLE_EXHAUSTIVE: Record<DurableEventPayload['kind'], true> = {
   PolicyDecisionRecorded: true,
   BoundaryExpansionGranted: true,
   BoundaryExpansionRevoked: true,
+  ApprovalGranted: true,
+  AuthorizationConsumed: true,
+  AuthorizationRevoked: true,
 };

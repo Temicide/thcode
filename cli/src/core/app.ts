@@ -18,6 +18,19 @@ import {
 } from './permissions/runtimeActivation.js';
 import { EffectExecutor, PolicyEnforcementPoint, type PepDecision, type PepInput } from './permissions/pep.js';
 import {
+  AuthorizationRegistry,
+  consumeAuthorization,
+  createAuthorization,
+  revalidateAuthorization,
+  revokeAuthorization,
+  revocationOutcome,
+  type Authorization,
+  type ConsumeResult,
+  type DispatchState,
+  type ProposalBinding,
+  type RevalidationResult,
+} from './permissions/authorization.js';
+import {
   BoundaryExpansionRegistry,
   checkHardBoundary,
   workspaceIdentity,
@@ -95,6 +108,8 @@ export class CoreApp {
   private readonly effectExecutor: EffectExecutor;
   /** Story 2.3: durable Boundary Expansions for the current Workspace. */
   private readonly boundaryExpansions: BoundaryExpansionRegistry;
+  /** Story 2.4: exact-proposal one-shot authorizations + EventId dedup. */
+  private readonly authorizations = new AuthorizationRegistry();
 
   constructor(opts: CoreAppOptions = {}) {
     // Fail-closed startup: incompatible protocol major version throws before
@@ -378,6 +393,118 @@ export class CoreApp {
       activationRevision: a.revision,
       enforcementAvailable: opts.enforcementAvailable,
     });
+  }
+
+  /** Story 2.4 AC #1: bind an unforgeable one-shot authorization to the EXACT
+   * proposal the user reviewed. The decision must be the PEP evaluation for
+   * this proposal; the authorization records the activationId/revision,
+   * authority revision, matrix version, expiry, and approving interaction.
+   * Journals `ApprovalGranted` Evidence (digests only — no raw payload). */
+  grantApproval(input: {
+    readonly operationId: string;
+    readonly binding: ProposalBinding;
+    readonly decision: PepDecision;
+    readonly expiresAt?: string | null;
+    readonly approvingInteraction: string;
+  }): Authorization {
+    const a = this.activation.snapshot();
+    const auth = createAuthorization({
+      operationId: input.operationId,
+      binding: input.binding,
+      decision: input.decision,
+      activationId: a.activationId,
+      activationRevision: a.revision,
+      authorityRevision: a.revision,
+      expiresAt: input.expiresAt ?? null,
+      approvingInteraction: input.approvingInteraction,
+      clock: this.clock,
+    });
+    this.authorizations.grant(auth);
+    this.repo?.append(
+      durableEvent(
+        {
+          kind: 'ApprovalGranted',
+          authorizationId: auth.authorizationId,
+          operationId: auth.operationId,
+          actionDigest: auth.actionDigest,
+          targetDigest: auth.targetDigest,
+          contextDigest: auth.contextDigest,
+          payloadDigest: auth.payloadDigest,
+          destinationDigest: auth.destinationDigest,
+          classification: auth.classification,
+          credentialGroup: auth.credentialGroup,
+          activationId: auth.activationId,
+          activationRevision: auth.activationRevision,
+          authorityRevision: auth.authorityRevision,
+          policyOutcome: auth.policyOutcome,
+          matrixVersion: auth.matrixVersion,
+          expiresAt: auth.expiresAt,
+          approvingInteraction: auth.approvingInteraction,
+        },
+        asSessionId(this.sessionId()),
+        { operationId: input.operationId, provenanceKind: 'deterministic', provenanceSource: 'approval', clock: this.clock },
+      ),
+    );
+    return auth;
+  }
+
+  /** Story 2.4 AC #2, AC #6: revalidate a bound authorization against the
+   * CURRENT proposal + activation immediately before dispatch. Any mismatch
+   * (rewritten proposal, changed activation/authority, expired/consumed/revoked
+   * one-shot) refuses the authorization — fresh evaluation + approval required. */
+  revalidateAuthorization(auth: Authorization, binding: ProposalBinding): RevalidationResult {
+    const a = this.activation.snapshot();
+    return revalidateAuthorization(auth, {
+      binding,
+      activationId: a.activationId,
+      activationRevision: a.revision,
+      authorityRevision: a.revision,
+      now: this.clock(),
+    });
+  }
+
+  /** Story 2.4 AC #1, AC #5: consume a one-shot authorization for a dispatched
+   * effect. Double consumption is refused (replayed approvals cannot acquire
+   * effect authority twice). Journals `AuthorizationConsumed` on success. */
+  consumeAuthorization(auth: Authorization): ConsumeResult {
+    const res = consumeAuthorization(auth);
+    if (!res.ok || !res.authorization) return res;
+    this.authorizations.replace(res.authorization);
+    this.repo?.append(
+      durableEvent(
+        { kind: 'AuthorizationConsumed', authorizationId: res.authorization.authorizationId, operationId: res.authorization.operationId },
+        asSessionId(this.sessionId()),
+        { operationId: res.authorization.operationId, provenanceKind: 'deterministic', provenanceSource: 'effect-executor', clock: this.clock },
+      ),
+    );
+    return { ok: true, authorization: res.authorization };
+  }
+
+  /** Story 2.4 AC #3, AC #4: revoke an authorization. Before dispatch commit
+   * the outcome is `cancelled`; after commit it is whatever durable Evidence
+   * proves (`succeeded`/`failed`/`unknown-outcome`/`still-running`) — never a
+   * cancellation fiction. Journals `AuthorizationRevoked` with the honest
+   * outcome. */
+  revokeAuthorization(auth: Authorization, dispatch: DispatchState, reason: string): {
+    readonly authorization: Authorization;
+    readonly outcome: 'cancelled' | 'failed' | 'succeeded' | 'unknown-outcome' | 'still-running';
+  } {
+    const revoked = revokeAuthorization(auth, reason);
+    this.authorizations.replace(revoked);
+    const outcome = revocationOutcome(dispatch);
+    this.repo?.append(
+      durableEvent(
+        { kind: 'AuthorizationRevoked', authorizationId: revoked.authorizationId, operationId: revoked.operationId, reason, outcome },
+        asSessionId(this.sessionId()),
+        { operationId: revoked.operationId, provenanceKind: 'deterministic', provenanceSource: 'revocation', clock: this.clock },
+      ),
+    );
+    return { authorization: revoked, outcome };
+  }
+
+  /** Story 2.4: lookup a bound authorization by id (for tests/UI inspection). */
+  getAuthorization(authorizationId: string): Authorization | undefined {
+    return this.authorizations.get(authorizationId);
   }
 
   /** Story 2.3 AC #1, #2: evaluate a proposal against the non-overridable
