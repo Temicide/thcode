@@ -33,11 +33,18 @@ import {
 import {
   BoundaryExpansionRegistry,
   checkHardBoundary,
-  workspaceIdentity,
   type BoundaryCheckInput,
   type BoundaryDecision,
   type BoundaryExpansion,
 } from './permissions/boundary.js';
+import {
+  establishWorkspaceBinding,
+  defaultPlatformProbe,
+  defaultFsProbe,
+} from './workspace/identity.js';
+import { resolveResource } from './workspace/resourceResolver.js';
+import { checkContainment } from './workspace/containment.js';
+import type { WorkspaceIdentity } from './workspace/types.js';
 import { createCredentialStore, type CredentialStore } from './platform/index.js';
 import { createDefaultProviderRegistry, ProviderRegistry } from './providers/registry.js';
 import type { NormalizedMessage } from './providers/types.js';
@@ -109,7 +116,7 @@ export class CoreApp {
    * Profile / Full Access / sensitive-transfer-override / composer-busy
    * state, separate from CoreApp's provider/session bookkeeping. */
   private activation: RuntimeActivation;
-  private workspace: ReturnType<typeof workspaceIdentity>;
+  private workspace: WorkspaceIdentity;
   /** Story 2.2: one local Policy Enforcement Point + the sanctioned effect
    * executor that is the only consumer allowed to turn an `allow` decision
    * into permission to run an effect. */
@@ -152,7 +159,13 @@ export class CoreApp {
 
     // Story 2.1 AD-22: a fresh Runtime Activation is established on process
     // start (this constructor), before any approval can be requested.
-    this.workspace = workspaceIdentity(this.workspaceRoot);
+    // Story 3.1: workspace binding uses the full WorkspaceIdentity with
+    // platform/volume identity and explicit binding status.
+    this.workspace = establishWorkspaceBinding(this.workspaceRoot, {
+      platformProbe: defaultPlatformProbe(),
+      fsProbe: defaultFsProbe(),
+      clock: this.clock,
+    });
     this.boundaryExpansions = new BoundaryExpansionRegistry(this.clock);
     this.effectExecutor = new EffectExecutor(this.pep);
     this.activation = this.establishActivation('process-start', this.workspace.workspaceId);
@@ -354,7 +367,11 @@ export class CoreApp {
    * (possibly new) Workspace, remaining separately inspectable (AC #5). */
   beginNewActivation(reason: ActivationReason, workspaceRoot?: string): AuthorityProjection {
     if (workspaceRoot !== undefined) {
-      this.workspace = workspaceIdentity(workspaceRoot);
+      this.workspace = establishWorkspaceBinding(workspaceRoot, {
+        platformProbe: defaultPlatformProbe(),
+        fsProbe: defaultFsProbe(),
+        clock: this.clock,
+      });
     }
     this.activation = this.establishActivation(reason, this.workspace.workspaceId);
     return this.authorityProjection();
@@ -568,6 +585,35 @@ export class CoreApp {
   /** Story 2.3 AC #5: full, auditable inventory of Boundary Expansions. */
   listBoundaryExpansions(): readonly BoundaryExpansion[] {
     return this.boundaryExpansions.list();
+  }
+
+  /** Story 3.1 AC #1: return the established WorkspaceIdentity for inspection
+   * and effect authorization. The identity includes platform identity, canonical
+   * root, case/Unicode policy, volume/device identity where available, and
+   * explicit binding status. A `blocked` binding cannot authorize local effects. */
+  workspaceBinding(): WorkspaceIdentity {
+    return this.workspace;
+  }
+
+  /** Story 3.1 AC #2: resolve a candidate path/resource reference against the
+   * current Workspace, producing a canonical ResourceIdentity. Reuses the
+   * existing `resolveWithinWorkspace` for containment. */
+  resolveWorkspaceResource(candidate: string, opts: { computeDigest?: boolean } = {}): import('./workspace/types.js').ResourceIdentity {
+    return resolveResource(this.workspace, candidate, {
+      fsProbe: defaultFsProbe(),
+      computeDigest: opts.computeDigest,
+    });
+  }
+
+  /** Story 3.1 AC #3: check whether a target path is safely contained within
+   * the workspace, accounting for symlinks, junctions, mount points, and
+   * reparse points. Returns `denied`/`conflict`/`enforcement-unverified` rather
+   * than claiming containment when identity cannot be proven. */
+  checkWorkspaceContainment(target: string, opts: { followSymlinks?: boolean } = {}): import('./workspace/types.js').ContainmentDecision {
+    return checkContainment(this.workspace, target, {
+      fsProbe: defaultFsProbe(),
+      followSymlinks: opts.followSymlinks,
+    });
   }
 
   /** Story 2.13: dispatch a typed command through the frozen grammar. The
