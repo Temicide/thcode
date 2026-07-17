@@ -1,10 +1,9 @@
 # Root .gitignore — applies across the whole thcode tree.
-# Aligned with project-context.md: never commit BMAD planning artifacts,
-# agent skills, local agent config, OS cruft, build output, or secrets.
+# Aligned with project-context.md: never commit agent skills, local agent
+# config, OS cruft, build output, or secrets. BMAD planning artifacts
+# (_bmad/ and _bmad-output/) ARE committed by project policy.
 
-# BMAD planning artifacts and agent skills/config — never committed
-_bmad/
-_bmad-output/
+# Local agent skills/config — never committed
 .agents/
 .claude/
 

@@ -191,6 +191,12 @@ import {
   type CredentialPersistence,
 } from './specialists/credential/index.js';
 import {
+  SpecialistHealthLifecycle,
+  buildSpecialistEffectiveConfiguration,
+  type SpecialistGenerationResult,
+  type SpecialistHealthSnapshot,
+} from './specialists/health/index.js';
+import {
   listCheckpoints,
   inspectCheckpoint,
   analyzeRollbackSet,
@@ -295,6 +301,8 @@ export class CoreApp {
   private readonly _disabledServices = new Set<string>();
   /** Story 4.3: secret-free AI-for-Thai credential reference persistence. */
   private _aiforthaiPersistence: CredentialPersistence = new InMemoryCredentialPersistence();
+  /** Story 4.4: specialist health lifecycle (dedicated HealthRegistry instance). */
+  private _specialistHealth: SpecialistHealthLifecycle;
 
   constructor(opts: CoreAppOptions = {}) {
     // Fail-closed startup: incompatible protocol major version throws before
@@ -307,6 +315,7 @@ export class CoreApp {
     this.health = opts.health ?? new HealthRegistry();
     this.repo = opts.repo;
     this.clock = opts.clock ?? (() => new Date().toISOString());
+    this._specialistHealth = new SpecialistHealthLifecycle(this.clock);
     this.loop = new AgentLoop({
       providers: this.providers,
       tools: this.tools,
@@ -378,6 +387,65 @@ export class CoreApp {
     });
     this.health.registerConfiguration(g);
     return this.health.check('typhoon');
+  }
+
+  // --- Story 4.4: Specialist health lifecycle ---
+
+  /**
+   * Access the SpecialistHealthLifecycle (dedicated HealthRegistry instance).
+   * Specialist and Typhoon health are kept independent.
+   */
+  specialistHealthLifecycle(): SpecialistHealthLifecycle {
+    return this._specialistHealth;
+  }
+
+  /**
+   * Build a SpecialistEffectiveConfiguration for a service. Loads the registry
+   * entry via capabilityRegistry(), loads the AI-for-Thai credential reference
+   * via the existing persistence, and builds request config defaults. Returns
+   * the typed SpecialistGenerationResult. Does NOT register or check health.
+   */
+  async buildSpecialistConfiguration(serviceId: string): Promise<SpecialistGenerationResult> {
+    const registry = this.capabilityRegistry();
+    if (!registry.ok) {
+      return {
+        ok: false,
+        cause: 'missing-field',
+        detail: 'Capability Registry is not loaded.',
+      };
+    }
+
+    const entry = registry.byId(serviceId);
+    if (!entry) {
+      return {
+        ok: false,
+        cause: 'missing-field',
+        detail: `Service "${serviceId}" not found in the Capability Registry.`,
+      };
+    }
+
+    const loaded = await this._aiforthaiPersistence.load();
+    const credentialReference = loaded.ok ? loaded.reference : null;
+
+    // Use the default request config (Stories 4.10–4.13 may override).
+    return buildSpecialistEffectiveConfiguration(entry, credentialReference, undefined, this.clock);
+  }
+
+  /**
+   * Check the health of a Specialist Service. Builds the configuration if
+   * successful, registers it, registers the probe (if one exists), and runs
+   * the check. Until probes are registered per service (Stories 4.10–4.13),
+   * `check` returns the HealthRegistry's `probe-missing` configuration failure.
+   * No Specialist is invoked here.
+   */
+  async checkSpecialistHealth(serviceId: string): Promise<SpecialistHealthSnapshot> {
+    const result = await this.buildSpecialistConfiguration(serviceId);
+    if (!result.ok) {
+      return { serviceId, state: 'unconfigured' };
+    }
+
+    this._specialistHealth.register(result.configuration);
+    return this._specialistHealth.check(serviceId);
   }
 
   // --- Story 4.3: AI-for-Thai credential JIT onboarding ---
@@ -1657,13 +1725,22 @@ export class CoreApp {
     }
   }
 
-  /** Build a health map from the registry entries and the health registry. */
+  /** Build a health map from the registry entries, the health registry, and
+   * the specialist health lifecycle. Specialist health snapshots are included
+   * so the catalog projection reflects specialist health. */
   private buildHealthMap(): HealthMap {
     const map: HealthMap = {};
     const registry = this.capabilityRegistry();
     if (registry.ok) {
       for (const entry of registry.all()) {
-        map[entry.id] = this.health.snapshot(entry.id).state;
+        // Prefer specialist health state when available; fall back to the
+        // general health registry (Typhoon).
+        const specialistSnap = this._specialistHealth.snapshot(entry.id);
+        if (specialistSnap.state !== 'unconfigured') {
+          map[entry.id] = specialistSnap.state;
+        } else {
+          map[entry.id] = this.health.snapshot(entry.id).state;
+        }
       }
     }
     return map;
