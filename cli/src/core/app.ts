@@ -123,6 +123,16 @@ import type {
   StatusProjection,
   TranscriptTurnProjection,
 } from './protocol/projections.js';
+import {
+  validateControlledCommand,
+  executeControlledCommand,
+  defaultValidationContext,
+  type CommandProposal,
+  type CommandValidationResult,
+  type CommandExecutionResult,
+  type CommandExecutionContext,
+} from './commands/index.js';
+import { sanitizer } from './security/sanitizer.js';
 
 export interface CoreStatus {
   readonly mode: WorkMode;
@@ -1111,6 +1121,52 @@ export class CoreApp {
       currentStoreUsageBytes: 0,
       mutationSet,
     });
+  }
+
+  /** Story 3.7 AC #1, AC #2: validate a controlled command proposal. Resolves
+   * approved executable identity, validates explicit argv vector, Workspace-
+   * contained cwd, allowed environment names/values, shell/startup-hook policy,
+   * timeout, output limits, and action digest. Returns denied/refused/
+   * enforcement-unverified for unsupported shell/platform, out-of-Workspace
+   * resource, privileged/system mutation, network boundary, or unavailable
+   * process enforcement. Never launches a process under any profile. */
+  validateControlledCommand(proposal: CommandProposal): CommandValidationResult {
+    return validateControlledCommand(proposal, {
+      workspaceRoot: this.workspaceRoot,
+      allowedExecutables: defaultValidationContext().allowedExecutables,
+      blockedEnvNames: defaultValidationContext().blockedEnvNames,
+      maxTimeoutMs: defaultValidationContext().maxTimeoutMs,
+      maxOutputBytes: defaultValidationContext().maxOutputBytes,
+      platform: this.workspace.platform.platform,
+      enforcementAvailable: true,
+      clock: this.clock,
+    });
+  }
+
+  /** Story 3.7 AC #3, AC #5: execute a controlled command that has passed
+   * policy and approval. Records exact executable, argv, cwd, safe environment
+   * summary, authority, timeout; ATOMICALLY consumes authorization + appends
+   * EffectDispatchCommitted BEFORE launch; output sanitized before Evidence/UI
+   * publication. Command side effects are marked excluded/never-protected for
+   * rollback scope; NO command result is treated as a rollback checkpoint. */
+  async runControlledCommand(
+    proposal: CommandProposal,
+    authorization: Authorization,
+    processRunner: import('./commands/types.js').ProcessRunner,
+    signal?: AbortSignal,
+  ): Promise<CommandExecutionResult> {
+    const a = this.activation.snapshot();
+    const ctx: CommandExecutionContext = {
+      processRunner,
+      clock: this.clock,
+      sessionId: this.sessionId(),
+      activationId: a.activationId,
+      activationRevision: a.revision,
+      authorityRevision: a.revision,
+      journal: this.repo ?? { append: () => 0 },
+      sanitizer,
+    };
+    return executeControlledCommand(proposal, authorization, ctx, signal);
   }
 
   /** Story 3.3 AC #4: process a confirmation for a partially protected or
