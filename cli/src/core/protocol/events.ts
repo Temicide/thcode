@@ -211,6 +211,33 @@ export interface AuthorizationRevokedPayload {
   readonly outcome: 'cancelled' | 'failed' | 'succeeded' | 'unknown-outcome' | 'still-running';
 }
 
+/** Deterministic authority-decision Evidence (Story 2.9, AD-3, AD-7, AD-24).
+ * Sanitized + attributable: links PromptRoundId/OperationId + digests +
+ * authority/matrix/policy versions + Workspace + provider/service identity +
+ * decision + reason + source event. No secrets or raw payloads. Distinct from
+ * `EvidenceRecordedPayload` (which carries the derived NormalizedIntent) — this
+ * is an additive, backward-compatible durable kind (AD-14). */
+export interface AuthorityEvidenceRecordedPayload {
+  readonly kind: 'AuthorityEvidenceRecorded';
+  readonly operationId: string;
+  readonly promptRoundId: string | null;
+  readonly decisionKind: 'policy-decision' | 'approval' | 'denial' | 'revocation' | 'boundary-change' | 'consent-decision' | 'credential-boundary-refusal' | 'auto-permit';
+  readonly actionDigest: string | null;
+  readonly targetDigest: string | null;
+  readonly payloadDigest: string | null;
+  readonly activationRevision: number;
+  readonly authorityRevision: number;
+  readonly matrixVersion: number;
+  readonly policyVersion: number;
+  readonly workspaceId: string;
+  readonly providerServiceIdentity: string | null;
+  readonly decision: 'allow' | 'ask' | 'deny' | 'cancelled' | 'stale' | 'refused';
+  readonly reasonCode: string;
+  readonly completeness: EvidenceCompleteness;
+  readonly sourceEventId: string | null;
+  readonly nextStep: string;
+}
+
 export type DurableEventPayload =
   | PromptSubmittedPayload
   | ChatInterruptedPayload
@@ -232,7 +259,8 @@ export type DurableEventPayload =
   | BoundaryExpansionRevokedPayload
   | ApprovalGrantedPayload
   | AuthorizationConsumedPayload
-  | AuthorizationRevokedPayload;
+  | AuthorizationRevokedPayload
+  | AuthorityEvidenceRecordedPayload;
 
 export const DURABLE_EVENT_KINDS = [
   'PromptSubmitted', 'ChatInterrupted', 'RemoteOutputObserved', 'EffectDispatchCommitted',
@@ -241,6 +269,7 @@ export const DURABLE_EVENT_KINDS = [
   'ContextCompacted', 'RuntimeActivationEstablished', 'AuthorityChanged',
   'PolicyDecisionRecorded', 'BoundaryExpansionGranted', 'BoundaryExpansionRevoked',
   'ApprovalGranted', 'AuthorizationConsumed', 'AuthorizationRevoked',
+  'AuthorityEvidenceRecorded',
 ] as const;
 
 export type DurableEventKind = (typeof DURABLE_EVENT_KINDS)[number];
@@ -278,4 +307,5 @@ export const _DURABLE_EXHAUSTIVE: Record<DurableEventPayload['kind'], true> = {
   ApprovalGranted: true,
   AuthorizationConsumed: true,
   AuthorizationRevoked: true,
+  AuthorityEvidenceRecorded: true,
 };
