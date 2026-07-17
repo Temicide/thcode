@@ -180,6 +180,16 @@ import type { DepPreflightResult } from './depPreflight/types.js';
 import { runHelloWorldProof } from './proof/index.js';
 import type { ProofEnvironment, ProofResult } from './proof/types.js';
 import { sanitizer } from './security/sanitizer.js';
+import type { OnboardingIO } from './security/onboarding.js';
+import {
+  onboardAiForThai,
+  hasAiForThaiKey,
+  InMemoryCredentialPersistence,
+  type AiForThaiOnboardingResult,
+  type CredentialRemovalResult,
+  type CredentialRotationResult,
+  type CredentialPersistence,
+} from './specialists/credential/index.js';
 import {
   listCheckpoints,
   inspectCheckpoint,
@@ -283,6 +293,8 @@ export class CoreApp {
   private readonly authorizations = new AuthorizationRegistry();
   /** Story 4.2: set of service IDs the user has disabled. */
   private readonly _disabledServices = new Set<string>();
+  /** Story 4.3: secret-free AI-for-Thai credential reference persistence. */
+  private _aiforthaiPersistence: CredentialPersistence = new InMemoryCredentialPersistence();
 
   constructor(opts: CoreAppOptions = {}) {
     // Fail-closed startup: incompatible protocol major version throws before
@@ -366,6 +378,114 @@ export class CoreApp {
     });
     this.health.registerConfiguration(g);
     return this.health.check('typhoon');
+  }
+
+  // --- Story 4.3: AI-for-Thai credential JIT onboarding ---
+
+  /**
+   * JIT connection-boundary hook: pauses before any Specialist request when no
+   * AI-for-Thai credential is configured. Discloses the reviewed endpoint,
+   * separate credential purpose, local OS credential storage, and four-service
+   * scope. Opens the masked form ONLY in interactive mode. Does NOT invoke a
+   * Specialist.
+   *
+   * On success, persists the secret-free reference + revision + fingerprint in
+   * product persistence. On failure, returns a typed cause with Inspect/
+   * Replace/Remove/Exit next actions and no Specialist invocation.
+   */
+  async ensureAiForThaiCredential(io: OnboardingIO): Promise<AiForThaiOnboardingResult> {
+    const hasKey = await hasAiForThaiKey(this.credentials);
+    if (hasKey) {
+      const loaded = await this._aiforthaiPersistence.load();
+      if (loaded.ok) {
+        return { ok: true, fingerprint: loaded.reference.fingerprint, reference: loaded.reference };
+      }
+    }
+
+    const result = await onboardAiForThai(this.credentials, io, this.clock);
+    if (result.ok) {
+      await this._aiforthaiPersistence.save(result.reference);
+    }
+    return result;
+  }
+
+  /** Check if an AI-for-Thai credential is configured. */
+  async hasAiForThaiCredential(): Promise<boolean> {
+    return hasAiForThaiKey(this.credentials);
+  }
+
+  /**
+   * Remove the AI-for-Thai credential. Invalidates the old reference and makes
+   * dependent EffectiveConfigurationGenerations stale/unavailable. No cached
+   * credential value remains in product buffers or persistence.
+   */
+  async removeAiForThaiCredential(): Promise<CredentialRemovalResult> {
+    const loaded = await this._aiforthaiPersistence.load();
+    if (!loaded.ok) {
+      // Still try to remove from the credential store.
+      try {
+        await this.credentials.delete('aiforthai');
+      } catch {
+        // Best-effort.
+      }
+      return { ok: false, cause: 'not-found', message: 'No AI-for-Thai credential reference to remove.' };
+    }
+
+    const refId = loaded.reference.referenceId;
+
+    // Remove from credential store.
+    try {
+      await this.credentials.delete('aiforthai');
+    } catch (e) {
+      return { ok: false, cause: 'store-error', message: `Failed to remove AI-for-Thai credential from store: ${(e as Error).message}` };
+    }
+
+    // Invalidate the persistence reference.
+    await this._aiforthaiPersistence.invalidate();
+
+    return { ok: true, invalidatedReferenceId: refId };
+  }
+
+  /**
+   * Rotate the AI-for-Thai credential. Invalidates the old reference and runs
+   * the onboarding flow for a new key. On success, persists the new secret-free
+   * reference. On failure, the old reference is already invalidated and no
+   * cached credential value remains.
+   */
+  async rotateAiForThaiCredential(io: OnboardingIO): Promise<CredentialRotationResult> {
+    // Invalidate the old reference first.
+    const loaded = await this._aiforthaiPersistence.load();
+    if (!loaded.ok) {
+      return { ok: false, cause: 'not-found', message: 'No AI-for-Thai credential reference to rotate.', nextActions: ['exit'] };
+    }
+
+    // Remove from credential store.
+    try {
+      await this.credentials.delete('aiforthai');
+    } catch (e) {
+      return { ok: false, cause: 'store-error', message: `Failed to remove old AI-for-Thai credential: ${(e as Error).message}`, nextActions: ['inspect', 'replace', 'remove', 'exit'] };
+    }
+
+    // Invalidate the persistence reference.
+    await this._aiforthaiPersistence.invalidate();
+
+    // Run the onboarding flow for the new key.
+    const result = await onboardAiForThai(this.credentials, io, this.clock);
+    if (result.ok) {
+      await this._aiforthaiPersistence.save(result.reference);
+      return { ok: true, newReference: result.reference };
+    }
+
+    // Onboarding failed — return the typed failure cause honestly. An
+    // unknown-outcome stays unknown-outcome (never remapped to store-error):
+    // the old reference was already invalidated, so the credential is gone,
+    // but the outcome of the new onboarding attempt is reported as-is.
+    return {
+      ok: false,
+      cause: result.cause,
+      message: result.message,
+      nextActions: result.nextActions,
+    };
   }
 
   status(): CoreStatus {
