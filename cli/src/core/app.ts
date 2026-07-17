@@ -34,6 +34,22 @@ import type {
 import { ToolCatalog } from './catalog/loader.js';
 import { CapabilityRegistry } from './specialists/registry/index.js';
 import {
+  browseCatalog,
+  searchCatalog,
+  inspectEntry,
+  enableService,
+  disableService,
+  diagnoseService,
+  retestService,
+  renderCatalogList,
+  renderEntryDetail,
+  renderEntryRow,
+  type CatalogProjection,
+  type CatalogEntryProjection,
+  type CatalogRenderMode,
+  type HealthMap,
+} from './specialists/catalog/index.js';
+import {
   contextUtilizationPercentOrUnavailable,
   effectiveContextCapacityOrUnavailable,
 } from './context/types.js';
@@ -265,6 +281,8 @@ export class CoreApp {
   private readonly boundaryExpansions: BoundaryExpansionRegistry;
   /** Story 2.4: exact-proposal one-shot authorizations + EventId dedup. */
   private readonly authorizations = new AuthorizationRegistry();
+  /** Story 4.2: set of service IDs the user has disabled. */
+  private readonly _disabledServices = new Set<string>();
 
   constructor(opts: CoreAppOptions = {}) {
     // Fail-closed startup: incompatible protocol major version throws before
@@ -1342,11 +1360,106 @@ export class CoreApp {
       case 'models':
         // AC #3: /models is Typhoon inspection-only; unresolved pins honestly labeled.
         return renderCommandOutput({ status: 'succeeded', body: `Typhoon inspection-only — model: ${this.providers.selected.capabilities.modelId}`, nextStep: 'continue' });
-      case 'tools':
+      case 'tools': {
         // AC #3: /tools exposes registry/diagnostic controls; does NOT invoke the
         // Epic 4 Capability Registry or Specialist services; Catalogued entries
         // are not made invokable.
-        return renderCommandOutput({ status: 'succeeded', body: this.listCatalog().join('\n'), nextStep: 'continue' });
+        const sub = args[0];
+        if (sub === 'search' && args[1]) {
+          const result = searchCatalog(
+            this.capabilityRegistry(),
+            this.buildHealthMap(),
+            this._disabledServices,
+            args.slice(1).join(' '),
+          );
+          if ('ok' in result && result.ok === false) {
+            return renderCommandOutput({ status: 'blocked', cause: result.message, nextStep: 'retry with a valid registry' });
+          }
+          const searchResult = result as { query: string; matches: readonly CatalogEntryProjection[]; total: number };
+          const searchMode: CatalogRenderMode = this.detectRenderMode();
+          const lines = [`Search results for "${searchResult.query}": ${searchResult.total} match(es)`];
+          for (const entry of searchResult.matches) {
+            lines.push(renderEntryRow(entry, searchMode));
+          }
+          return renderCommandOutput({ status: 'succeeded', body: lines.join('\n'), nextStep: 'continue' });
+        }
+        if (sub === 'inspect' && args[1]) {
+          const result = inspectEntry(
+            this.capabilityRegistry(),
+            this.buildHealthMap(),
+            this._disabledServices,
+            args[1],
+          );
+          if (!result.ok) {
+            return renderCommandOutput({ status: 'blocked', cause: result.message, nextStep: 'verify the service id and retry' });
+          }
+          const mode: CatalogRenderMode = this.detectRenderMode();
+          const body = result.entry ? renderEntryDetail(result.entry, mode) : result.message;
+          return renderCommandOutput({ status: 'succeeded', body, nextStep: 'continue' });
+        }
+        if (sub === 'enable' && args[1]) {
+          const result = enableService(this._disabledServices, args[1]);
+          if (!result.ok) {
+            return renderCommandOutput({ status: 'blocked', cause: result.message, nextStep: 'verify the service id and retry' });
+          }
+          return renderCommandOutput({ status: 'succeeded', body: result.message, nextStep: 'continue' });
+        }
+        if (sub === 'disable' && args[1]) {
+          const result = disableService(
+            this.capabilityRegistry(),
+            this._disabledServices,
+            args[1],
+          );
+          if (!result.ok) {
+            return renderCommandOutput({ status: 'blocked', cause: result.message, nextStep: 'verify the service id and retry' });
+          }
+          return renderCommandOutput({ status: 'succeeded', body: result.message, nextStep: 'continue' });
+        }
+        if (sub === 'diagnose' && args[1]) {
+          const result = diagnoseService(
+            this.capabilityRegistry(),
+            this.buildHealthMap(),
+            this._disabledServices,
+            args[1],
+          );
+          if ('ok' in result && result.ok === false) {
+            return renderCommandOutput({ status: 'blocked', cause: result.message, nextStep: 'verify the service id and retry' });
+          }
+          const diag = result as { id: string; canonicalState: string; healthState: string; safeReason: string; nextAllowedAction: string; retestRecommended: boolean };
+          const lines = [
+            `Diagnosis for "${diag.id}":`,
+            `  State: ${diag.canonicalState}`,
+            `  Health: ${diag.healthState}`,
+            `  Reason: ${diag.safeReason}`,
+            `  Next action: ${diag.nextAllowedAction}`,
+            `  Retest recommended: ${diag.retestRecommended}`,
+          ];
+          return renderCommandOutput({ status: 'succeeded', body: lines.join('\n'), nextStep: 'continue' });
+        }
+        if (sub === 'retest' && args[1]) {
+          const result = retestService(
+            this.capabilityRegistry(),
+            this.buildHealthMap(),
+            this._disabledServices,
+            args[1],
+          );
+          if (!result.ok) {
+            return renderCommandOutput({ status: 'blocked', cause: result.message, nextStep: 'verify the service id and retry' });
+          }
+          return renderCommandOutput({ status: 'succeeded', body: result.message, nextStep: 'continue' });
+        }
+        // No subcommand or unrecognized subcommand → browse
+        const mode: CatalogRenderMode = this.detectRenderMode();
+        const projection = browseCatalog(
+          this.capabilityRegistry(),
+          this.buildHealthMap(),
+          this._disabledServices,
+        );
+        if ('ok' in projection && projection.ok === false) {
+          return renderCommandOutput({ status: 'blocked', cause: projection.message, nextStep: 'ensure the registry is loaded' });
+        }
+        return renderCommandOutput({ status: 'succeeded', body: renderCatalogList(projection as CatalogProjection, mode), nextStep: 'continue' });
+      }
       case 'check': {
         const result = this.runCheck();
         const status = result.overall === 'all-verified' ? 'succeeded' : 'blocked';
@@ -1422,6 +1535,32 @@ export class CoreApp {
     } catch (e) {
       return [`Catalog unavailable: ${(e as Error).message}`];
     }
+  }
+
+  /** Build a health map from the registry entries and the health registry. */
+  private buildHealthMap(): HealthMap {
+    const map: HealthMap = {};
+    const registry = this.capabilityRegistry();
+    if (registry.ok) {
+      for (const entry of registry.all()) {
+        map[entry.id] = this.health.snapshot(entry.id).state;
+      }
+    }
+    return map;
+  }
+
+  /** Detect the current render mode from the output surface. An interactive
+   * TTY renders the full interactive layout; a non-TTY (redirected/piped)
+   * context renders the redirected form so catalog rows keep their stable
+   * identifier + canonical token + safe reason + action availability without
+   * relying on color (AC #5). Narrow/headless modes require caller-provided
+   * context and are selected by the UI layer; the headless core reflects the
+   * TTY surface it can observe. */
+  private detectRenderMode(): CatalogRenderMode {
+    if (typeof process !== 'undefined' && process.stdout && process.stdout.isTTY === false) {
+      return 'redirected';
+    }
+    return 'interactive';
   }
 
   async runTurn(
