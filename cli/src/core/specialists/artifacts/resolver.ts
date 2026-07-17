@@ -6,6 +6,7 @@
 
 import { createHash } from 'node:crypto';
 import { resolveWithinWorkspace, WorkspaceBoundaryError } from '../../tools/workspace.js';
+import { platformForRoot } from '../../workspace/platformPath.js';
 import { resolveResource } from '../../workspace/resourceResolver.js';
 import type { FsProbe, WorkspaceIdentity, ResourceIdentity } from '../../workspace/types.js';
 import { asWorkspaceId } from '../../workspace/types.js';
@@ -251,12 +252,15 @@ export class SpecialistArtifactResolver implements ArtifactResolver {
     // Step 10: Compute SHA-256 content hash.
     const contentHash = computeContentHash(contentForHash);
 
-    // Step 11: Build source identity via resolveResource.
+    // Step 11: Build source identity via resolveResource. Path semantics follow
+    // the workspace root's own platform shape, not the host process — a POSIX
+    // root must resolve with POSIX separators even on a Windows host.
+    const rootPlatform = platformForRoot(workspaceRoot) ?? process.platform;
     const wsIdentity: WorkspaceIdentity = {
       workspaceId: asWorkspaceId(`ws-${workspaceRoot}`),
       platform: {
-        platform: process.platform,
-        casePolicy: process.platform === 'win32' ? 'case-insensitive' : 'case-sensitive',
+        platform: rootPlatform,
+        casePolicy: rootPlatform === 'win32' ? 'case-insensitive' : 'case-sensitive',
         unicodePolicy: 'unknown',
       },
       canonicalRoot: workspaceRoot,

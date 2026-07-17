@@ -1,4 +1,4 @@
-import path from 'node:path';
+import { pathFor, platformForRoot } from '../workspace/platformPath.js';
 
 /**
  * Raised when a requested path resolves outside the session Workspace Binding.
@@ -17,19 +17,30 @@ export class WorkspaceBoundaryError extends Error {
  * case-insensitive comparison (Node's win32 path.relative is case-folding),
  * plus `..` traversal and cross-drive absolute escapes.
  *
+ * `platform` selects the path flavor; when omitted it is inferred from the shape
+ * of `root` (see platformForRoot) so a POSIX-rooted workspace resolves with POSIX
+ * separators and a Windows-rooted one with backslashes, regardless of host OS.
+ * The path separator is governed by the root's shape, not by the workspace's
+ * declared case/Unicode platform probe.
+ *
  * Returns the absolute, normalized path on success; throws WorkspaceBoundaryError
  * otherwise. UNC and macOS/Linux specifics are handled by the platform's own
  * `path` implementation.
  */
-export function resolveWithinWorkspace(root: string, candidate: string): string {
-  const resolvedRoot = path.resolve(root);
-  const resolved = path.resolve(resolvedRoot, candidate);
-  const rel = path.relative(resolvedRoot, resolved);
+export function resolveWithinWorkspace(
+  root: string,
+  candidate: string,
+  platform: string | undefined = platformForRoot(root),
+): string {
+  const p = pathFor(platform);
+  const resolvedRoot = p.resolve(root);
+  const resolved = p.resolve(resolvedRoot, candidate);
+  const rel = p.relative(resolvedRoot, resolved);
 
   const escapes =
     rel === '..' ||
-    rel.startsWith(`..${path.sep}`) ||
-    path.isAbsolute(rel); // different drive / UNC root => absolute relative path
+    rel.startsWith(`..${p.sep}`) ||
+    p.isAbsolute(rel); // different drive / UNC root => absolute relative path
 
   if (escapes) {
     throw new WorkspaceBoundaryError(candidate, resolvedRoot);

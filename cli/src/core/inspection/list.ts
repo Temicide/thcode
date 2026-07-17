@@ -7,9 +7,9 @@
 // Injectable fsProbe + clock for offline testing.
 
 import { createHash } from 'node:crypto';
-import path from 'node:path';
 import { resolveWithinWorkspace, WorkspaceBoundaryError } from '../tools/workspace.js';
 import { checkContainment } from '../workspace/containment.js';
+import { pathFor, platformForRoot } from '../workspace/platformPath.js';
 import type { WorkspaceIdentity } from '../workspace/types.js';
 import type {
   EntryMetadata,
@@ -158,6 +158,7 @@ function walkDirectory(
   if (depth > limits.maxRecursionDepth) return;
   if (entries.length >= limits.maxFileCount) return;
 
+  const p = pathFor(platformForRoot(ws.canonicalRoot));
   let dirEntries: string[];
   try {
     dirEntries = fsProbe.readdirSync(dir);
@@ -168,7 +169,7 @@ function walkDirectory(
   for (const name of dirEntries) {
     if (entries.length >= limits.maxFileCount) return;
 
-    const absPath = path.join(dir, name);
+    const absPath = p.join(dir, name);
 
     try {
       const stats = fsProbe.lstat(absPath);
@@ -177,8 +178,9 @@ function walkDirectory(
       if (stats.isSymbolicLink) continue;
 
       if (stats.isDirectory) {
-        // Add directory entry.
-        const relPath = path.relative(root, absPath);
+        // Add directory entry. Display paths use forward slashes regardless of
+        // platform (stable cross-platform convention).
+        const relPath = p.relative(root, absPath).split(p.sep).join('/');
         entries.push({
           path: relPath,
           type: 'directory',
@@ -188,7 +190,7 @@ function walkDirectory(
         // Recurse into subdirectory.
         walkDirectory(fsProbe, ws, root, absPath, depth + 1, limits, computeDigests, entries);
       } else if (stats.isFile) {
-        const relPath = path.relative(root, absPath);
+        const relPath = p.relative(root, absPath).split(p.sep).join('/');
         let digest: string | null = null;
         if (computeDigests) {
           digest = computeFileDigest(fsProbe, absPath);

@@ -392,7 +392,19 @@ describe('AC #3: Containment', () => {
     mkdirSync(wsDir, { recursive: true });
     mkdirSync(outsideDir, { recursive: true });
     writeFileSync(path.join(outsideDir, 'secret.txt'), 'secret');
-    symlinkSync(path.join(outsideDir, 'secret.txt'), path.join(wsDir, 'leak.txt'));
+    // Creating a symlink requires privilege on Windows (Developer Mode / admin).
+    // Where the OS forbids it, skip — the in-memory containment tests above
+    // already cover the no-follow logic deterministically.
+    try {
+      symlinkSync(path.join(outsideDir, 'secret.txt'), path.join(wsDir, 'leak.txt'));
+    } catch (e) {
+      const code = (e as NodeJS.ErrnoException).code;
+      if (code === 'EPERM' || code === 'EACCES') {
+        rmSync(tmpDir, { recursive: true, force: true });
+        return;
+      }
+      throw e;
+    }
 
     try {
       const ws = establishWorkspaceBinding(wsDir, {

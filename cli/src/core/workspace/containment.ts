@@ -7,8 +7,8 @@
 // Uses `fs.lstat`/`fs.readlink` via an injectable fsProbe; never silently
 // follow.
 
-import path from 'node:path';
 import { resolveWithinWorkspace } from '../tools/workspace.js';
+import { pathFor, platformForRoot } from './platformPath.js';
 import type { ContainmentDecision, FsProbe, WorkspaceIdentity } from './types.js';
 
 export interface ContainmentOptions {
@@ -41,6 +41,11 @@ export function checkContainment(
   opts: ContainmentOptions = {},
 ): ContainmentDecision {
   const fsProbe = opts.fsProbe;
+  // Path math follows the shape of the canonical root, not the host OS — a
+  // POSIX-rooted workspace must resolve with POSIX separators on a Windows host
+  // and vice versa (ADR 0008). The declared platform probe governs case/Unicode
+  // policy, not separators.
+  const p = pathFor(platformForRoot(ws.canonicalRoot));
 
   // Without an fsProbe, we cannot verify containment — return
   // enforcement-unverified rather than claiming containment.
@@ -65,11 +70,12 @@ export function checkContainment(
   }
 
   // Walk each path component to check for symlinks/junctions/mount points.
-  const components = resolved.replace(ws.canonicalRoot, '').split(path.sep).filter(Boolean);
-  let current = ws.canonicalRoot;
+  const rootPrefix = p.resolve(ws.canonicalRoot);
+  const components = resolved.slice(rootPrefix.length).split(p.sep).filter(Boolean);
+  let current = rootPrefix;
 
   for (const component of components) {
-    current = path.join(current, component);
+    current = p.join(current, component);
 
     try {
       const stats = fsProbe.lstat(current);
@@ -84,7 +90,7 @@ export function checkContainment(
         }
         // Follow the symlink and check if the target is within the workspace.
         const linkTarget = fsProbe.readlink(current);
-        const resolvedLink = path.resolve(path.dirname(current), linkTarget);
+        const resolvedLink = p.resolve(p.dirname(current), linkTarget);
         try {
           resolveWithinWorkspace(ws.canonicalRoot, resolvedLink);
         } catch {

@@ -5,9 +5,10 @@
 //
 // Injectable fsProbe + clock for offline testing.
 
-import path from 'node:path';
+import type { PlatformPath } from 'node:path';
 import { resolveWithinWorkspace, WorkspaceBoundaryError } from '../tools/workspace.js';
 import { checkContainment } from '../workspace/containment.js';
+import { pathFor, platformForRoot } from '../workspace/platformPath.js';
 import type { WorkspaceIdentity } from '../workspace/types.js';
 import type {
   InspectionFsProbe,
@@ -139,6 +140,7 @@ export function inspectSearch(
 
   walkAndSearch(
     fsProbe,
+    pathFor(platformForRoot(ws.canonicalRoot)),
     resolvedPath,
     resolvedPath,
     0,
@@ -170,6 +172,7 @@ export function inspectSearch(
  */
 function walkAndSearch(
   fsProbe: InspectionFsProbe,
+  p: PlatformPath,
   root: string,
   dir: string,
   depth: number,
@@ -196,7 +199,7 @@ function walkAndSearch(
     if (matches.length >= limits.maxFileCount) return;
     if (searchWork >= limits.maxSearchWork) return;
 
-    const absPath = path.join(dir, name);
+    const absPath = p.join(dir, name);
 
     try {
       const stats = fsProbe.lstat(absPath);
@@ -205,13 +208,13 @@ function walkAndSearch(
       if (stats.isSymbolicLink) continue;
 
       if (stats.isDirectory) {
-        walkAndSearch(fsProbe, root, absPath, depth + 1, query, limits, matches, (n) => { filesSearched += n; }, (n) => { searchWork += n; });
+        walkAndSearch(fsProbe, p, root, absPath, depth + 1, query, limits, matches, (n) => { filesSearched += n; }, (n) => { searchWork += n; });
       } else if (stats.isFile) {
         // Skip files that exceed the size limit.
         if (stats.size > limits.maxFileSize) continue;
 
         // Read and search the file.
-        const result = searchFile(fsProbe, root, absPath, query);
+        const result = searchFile(fsProbe, p, root, absPath, query);
         if (result) {
           for (const match of result.matches) {
             matches.push(match);
@@ -240,6 +243,7 @@ interface SearchFileResult {
  */
 function searchFile(
   fsProbe: InspectionFsProbe,
+  p: PlatformPath,
   root: string,
   filePath: string,
   query: string,
@@ -280,7 +284,7 @@ function searchFile(
 
   // Search for the query.
   const matches: SearchMatch[] = [];
-  const relPath = path.relative(root, filePath);
+  const relPath = p.relative(root, filePath).split(p.sep).join('/');
   const searchWork = Math.ceil(text.length / 100); // approximate work units
 
   for (let i = 0; i < lines.length; i++) {
