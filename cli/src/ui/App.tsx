@@ -15,6 +15,18 @@ export interface AppProps {
   core: CoreApp;
 }
 
+/**
+ * Render `contextPercent` for the status row (PR-4). Never fabricates a
+ * numeric percentage from an unverified capacity — when no verified Typhoon
+ * context limit exists, `contextPercent` IS the literal canonical token
+ * `'percentage unavailable'` (StatusProjection, AD-28 dimension 4) and it is
+ * shown verbatim rather than interpolated into a `Ctx N%` string. Exported
+ * so this contract is directly unit-testable without rendering Ink.
+ */
+export function formatContextPercent(contextPercent: number | 'percentage unavailable'): string {
+  return contextPercent === 'percentage unavailable' ? contextPercent : `Ctx ${contextPercent}%`;
+}
+
 export function App({ core }: AppProps) {
   const { exit } = useApp();
   const [input, setInput] = useState('');
@@ -154,8 +166,10 @@ export function App({ core }: AppProps) {
           <Text inverse> </Text>
         </Text>
         {/* Context Donut textual fallback (ADR 0015). TODO(context-donut):
-            segmented Unicode ring + severity colors. */}
-        <Text dimColor>Ctx {status.contextPercent}%</Text>
+            segmented Unicode ring + severity colors. PR-4: no verified
+            Typhoon context limit ⇒ the literal `percentage unavailable`
+            token, never a fabricated `Ctx N%`. */}
+        <Text dimColor>{formatContextPercent(status.contextPercent)}</Text>
       </Box>
     </Box>
   );

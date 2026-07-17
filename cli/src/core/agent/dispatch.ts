@@ -13,6 +13,7 @@ import type { CredentialStore } from '../platform/credentialStore.js';
 import type { ProviderRegistry } from '../providers/registry.js';
 import { sanitizer } from '../security/sanitizer.js';
 import { extractIntent, type IntentExtractionResult, type NormalizedIntent } from './intent.js';
+import type { NormalizedIntentEvidence } from '../protocol/events.js';
 import {
   newEventId, newPromptRoundId, newOperationId, asSessionId, asOperationId, asPromptRoundId,
   type SessionId,
@@ -44,6 +45,45 @@ export function validateToolProposal(result: ProviderResult): ProposalValidation
   // existing fallback marker for un-parseable tool args — it is accepted but
   // flagged as `malformed` by the caller.
   return { valid: true };
+}
+
+/**
+ * Sanitize a derived `NormalizedIntent` per the Story 1.5 boundary before it
+ * is journaled as Evidence (AD-24, AD-7). Every string-bearing field runs
+ * through `sanitizer.sanitize(..., 'user-content')`; a field that sanitizes
+ * to unsafe/empty is replaced with `[redacted]` and the record's Evidence
+ * completeness downgrades from `complete` to `sanitized-with-omissions`
+ * rather than ever persisting the raw value (AD-24 block-or-omit semantics).
+ */
+export function sanitizeIntentEvidence(intent: NormalizedIntent): {
+  readonly evidence: NormalizedIntentEvidence;
+  readonly completeness: 'complete' | 'sanitized-with-omissions';
+} {
+  let hadOmission = false;
+  const clean = (v: string | null): string | null => {
+    if (v === null) return null;
+    const r = sanitizer.sanitize(v, 'user-content');
+    if (!r.ok) {
+      hadOmission = true;
+      return '[redacted]';
+    }
+    if (r.omissions.length > 0) hadOmission = true;
+    return r.value;
+  };
+  const evidence: NormalizedIntentEvidence = {
+    version: intent.version,
+    outcome: clean(intent.outcome),
+    constraints: intent.constraints.map((c) => clean(c) ?? '[redacted]'),
+    references: intent.references.map((r) => ({
+      kind: r.kind,
+      raw: clean(r.raw) ?? '[redacted]',
+      ...(r.canonical !== undefined ? { canonical: clean(r.canonical) ?? '[redacted]' } : {}),
+    })),
+    verificationIntent: clean(intent.verificationIntent),
+    languageHint: intent.languageHint,
+    ambiguity: intent.ambiguity,
+  };
+  return { evidence, completeness: hadOmission ? 'sanitized-with-omissions' : 'complete' };
 }
 
 /** Build a durable event with the canonical envelope (AD-3). */
@@ -135,6 +175,27 @@ export async function dispatchTyphoonTurn(args: {
       events,
     };
   }
+
+  // 1b. AC #3 fix: the derived NormalizedIntent is durably journaled as
+  // Evidence — sanitized (Story 1.5 boundary, AD-24) and linked by
+  // `promptHash` + `promptRoundId` (AD-7) — not merely computed and referenced
+  // in memory. Recorded whether or not dispatch proceeds (material ambiguity
+  // still produced a NormalizedIntent worth attributing).
+  const { evidence: sanitizedIntent, completeness: intentCompleteness } = sanitizeIntentEvidence(intent!);
+  append(durableEvent(
+    {
+      kind: 'EvidenceRecorded',
+      operationId,
+      completeness: intentCompleteness,
+      evidenceKind: 'normalized-intent',
+      promptRoundId,
+      promptHash: intent!.promptHash,
+      intent: sanitizedIntent,
+    },
+    sessionId,
+    { promptRoundId, operationId, provenanceKind: 'deterministic', provenanceSource: 'intent-extractor', clock: args.clock },
+  ));
+
   if (intent?.ambiguity === 'material') {
     // Material ambiguity: ask, do not dispatch (AC #4, AD-14).
     return {

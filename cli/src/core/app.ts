@@ -4,10 +4,27 @@
 // child_process directly.
 
 import { AgentLoop, type ApprovalCallback } from './agent/loop.js';
-import { dispatchTyphoonTurn } from './agent/dispatch.js';
+import { dispatchTyphoonTurn, durableEvent } from './agent/dispatch.js';
 import { ToolCatalog } from './catalog/loader.js';
-import { contextUtilizationPercent, effectiveContextCapacity } from './context/types.js';
-import { NEW_SESSION_DEFAULT, type PermissionProfile, type WorkMode } from './permissions/types.js';
+import {
+  contextUtilizationPercentOrUnavailable,
+  effectiveContextCapacityOrUnavailable,
+} from './context/types.js';
+import type { PermissionProfile, WorkMode } from './permissions/types.js';
+import {
+  activationEstablishedPayload,
+  RuntimeActivation,
+  type ActivationReason,
+} from './permissions/runtimeActivation.js';
+import { EffectExecutor, PolicyEnforcementPoint, type PepDecision, type PepInput } from './permissions/pep.js';
+import {
+  BoundaryExpansionRegistry,
+  checkHardBoundary,
+  workspaceIdentity,
+  type BoundaryCheckInput,
+  type BoundaryDecision,
+  type BoundaryExpansion,
+} from './permissions/boundary.js';
 import { createCredentialStore, type CredentialStore } from './platform/index.js';
 import { createDefaultProviderRegistry, ProviderRegistry } from './providers/registry.js';
 import type { NormalizedMessage } from './providers/types.js';
@@ -15,14 +32,24 @@ import { HealthRegistry, type HealthSnapshot } from './providers/health.js';
 import { typhoonGeneration, typhoonHealthProbe } from './providers/typhoonHealth.js';
 import { createDefaultToolRegistry, type ToolRegistry } from './tools/registry.js';
 import { assertCompatibleVersion, PROTOCOL_MAJOR } from './protocol/coreProtocol.js';
-import type { ConversationProjection, StatusProjection, TranscriptTurnProjection } from './protocol/projections.js';
+import { asSessionId, newOperationId } from './protocol/ids.js';
+import type { SessionRepository } from './sessions/repository.js';
+import type {
+  AuthorityProjection,
+  ConversationProjection,
+  StatusProjection,
+  TranscriptTurnProjection,
+} from './protocol/projections.js';
 
 export interface CoreStatus {
   readonly mode: WorkMode;
   readonly profile: PermissionProfile;
   readonly providerId: string;
   readonly modelId: string;
-  readonly contextPercent: number;
+  /** Canonical: a number when a verified capacity exists, otherwise the
+   * literal token `'percentage unavailable'` (PR-4). Never a fabricated
+   * `128k`/`115,200`-derived number. */
+  readonly contextPercent: number | 'percentage unavailable';
   readonly healthState: string;
 }
 
@@ -32,6 +59,15 @@ export interface CoreAppOptions {
   providers?: ProviderRegistry;
   tools?: ToolRegistry;
   health?: HealthRegistry;
+  /** Optional durable journal repository (Story 1.9's known gap: CoreApp
+   * does not wire a real one by default yet — Epic 6 does). When present,
+   * Epic 2 authority events (`RuntimeActivationEstablished`,
+   * `AuthorityChanged`, `PolicyDecisionRecorded`,
+   * `BoundaryExpansionGranted`/`Revoked`) are journaled durably; when
+   * absent, the same transitions still happen in memory (state, projections)
+   * but are not persisted — tests that need durability pass a repo. */
+  repo?: SessionRepository;
+  clock?: () => string;
 }
 
 export class CoreApp {
@@ -41,11 +77,24 @@ export class CoreApp {
   readonly health: HealthRegistry;
   readonly workspaceRoot: string;
 
-  private mode: WorkMode = NEW_SESSION_DEFAULT.mode;
-  private profile: PermissionProfile = NEW_SESSION_DEFAULT.profile;
   private history: NormalizedMessage[] = [];
   private estimatedContextTokens = 0;
   private readonly loop: AgentLoop;
+  private readonly repo?: SessionRepository;
+  private readonly clock: () => string;
+
+  /** Story 2.1: Runtime Activation owns the live Work Mode / Permission
+   * Profile / Full Access / sensitive-transfer-override / composer-busy
+   * state, separate from CoreApp's provider/session bookkeeping. */
+  private activation: RuntimeActivation;
+  private workspace: ReturnType<typeof workspaceIdentity>;
+  /** Story 2.2: one local Policy Enforcement Point + the sanctioned effect
+   * executor that is the only consumer allowed to turn an `allow` decision
+   * into permission to run an effect. */
+  private readonly pep = new PolicyEnforcementPoint();
+  private readonly effectExecutor: EffectExecutor;
+  /** Story 2.3: durable Boundary Expansions for the current Workspace. */
+  private readonly boundaryExpansions: BoundaryExpansionRegistry;
 
   constructor(opts: CoreAppOptions = {}) {
     // Fail-closed startup: incompatible protocol major version throws before
@@ -56,6 +105,8 @@ export class CoreApp {
     this.providers = opts.providers ?? createDefaultProviderRegistry();
     this.tools = opts.tools ?? createDefaultToolRegistry();
     this.health = opts.health ?? new HealthRegistry();
+    this.repo = opts.repo;
+    this.clock = opts.clock ?? (() => new Date().toISOString());
     this.loop = new AgentLoop({
       providers: this.providers,
       tools: this.tools,
@@ -74,6 +125,33 @@ export class CoreApp {
         return syncGet ? syncGet.call(this.credentials, 'typhoon') : null;
       }),
     );
+
+    // Story 2.1 AD-22: a fresh Runtime Activation is established on process
+    // start (this constructor), before any approval can be requested.
+    this.workspace = workspaceIdentity(this.workspaceRoot);
+    this.boundaryExpansions = new BoundaryExpansionRegistry(this.clock);
+    this.effectExecutor = new EffectExecutor(this.pep);
+    this.activation = this.establishActivation('process-start', this.workspace.workspaceId);
+  }
+
+  /** Story 2.1 AC #1: build a fresh Runtime Activation and journal
+   * `RuntimeActivationEstablished` BEFORE any approval can be requested
+   * against it (this method itself never requests one). */
+  private establishActivation(reason: ActivationReason, workspaceId: string): RuntimeActivation {
+    const activation = new RuntimeActivation({ workspaceId, reason, clock: this.clock });
+    const payload = activationEstablishedPayload(activation.snapshot());
+    this.repo?.append(
+      durableEvent(payload, asSessionId(this.sessionId()), {
+        provenanceKind: 'deterministic',
+        provenanceSource: 'runtime-activation',
+        clock: this.clock,
+      }),
+    );
+    return activation;
+  }
+
+  private sessionId(): string {
+    return `sess-${this.providers.selectedId}`;
   }
 
   /** Live Typhoon health check (FR-2, FR-4, AD-8). Registers the current
@@ -98,13 +176,14 @@ export class CoreApp {
 
   status(): CoreStatus {
     const caps = this.providers.selected.capabilities;
-    const capacity = effectiveContextCapacity(caps.contextLimit);
+    const capacity = effectiveContextCapacityOrUnavailable(caps.contextLimit);
+    const a = this.activation.snapshot();
     return {
-      mode: this.mode,
-      profile: this.profile,
+      mode: a.mode,
+      profile: a.profile,
       providerId: this.providers.selectedId,
       modelId: caps.modelId,
-      contextPercent: contextUtilizationPercent(this.estimatedContextTokens, capacity),
+      contextPercent: contextUtilizationPercentOrUnavailable(this.estimatedContextTokens, capacity),
       healthState: this.health.snapshot(this.providers.selectedId).state,
     };
   }
@@ -113,16 +192,44 @@ export class CoreApp {
    * redirected text, and headless JSON. */
   statusProjection(): StatusProjection {
     const caps = this.providers.selected.capabilities;
-    const capacity = effectiveContextCapacity(caps.contextLimit);
-    const percent = contextUtilizationPercent(this.estimatedContextTokens, capacity);
+    // PR-4: caps.contextLimit is `null` until a verified Typhoon limit is
+    // sourced. The null-aware helpers propagate `'percentage unavailable'`
+    // end to end rather than deriving a numeric percent from an unverified
+    // literal (epics.md Pre-Implementation Gate).
+    const capacity = effectiveContextCapacityOrUnavailable(caps.contextLimit);
+    const percent = contextUtilizationPercentOrUnavailable(this.estimatedContextTokens, capacity);
+    const a = this.activation.snapshot();
     return {
-      workMode: this.mode,
-      permissionProfile: this.profile,
-      fullAccess: this.profile === 'full-access',
+      workMode: a.mode,
+      permissionProfile: a.profile,
+      fullAccess: a.profile === 'full-access',
       providerId: this.providers.selectedId,
       modelId: caps.modelId,
       healthState: this.health.snapshot(this.providers.selectedId).state,
-      contextPercent: Number.isFinite(percent) ? percent : 'percentage unavailable',
+      contextPercent: percent,
+      enforcementVerified: false,
+    };
+  }
+
+  /** Canonical AuthorityProjection (Story 2.1 AC #2, AD-22). Workspace
+   * identity, activation identity/revision, Work Mode, and Permission
+   * Profile are independently addressable — the projection never derives one
+   * from another. */
+  authorityProjection(): AuthorityProjection {
+    const a = this.activation.snapshot();
+    const now = this.clock();
+    const active = this.boundaryExpansions
+      .list()
+      .filter((e) => !e.revoked && (e.expiresAt === null || e.expiresAt > now)).length;
+    return {
+      activationId: a.activationId,
+      activationRevision: a.revision,
+      workspaceId: a.workspaceId,
+      workMode: a.mode,
+      permissionProfile: a.profile,
+      fullAccess: a.profile === 'full-access',
+      sensitiveTransferOverride: a.sensitiveTransferOverride,
+      activeBoundaryExpansionCount: active,
       enforcementVerified: false,
     };
   }
@@ -140,11 +247,11 @@ export class CoreApp {
       evidenceComplete: 'complete' as const,
     }));
     const caps = this.providers.selected.capabilities;
-    const capacity = effectiveContextCapacity(caps.contextLimit);
+    const capacity = effectiveContextCapacityOrUnavailable(caps.contextLimit);
     return {
       status: this.statusProjection(),
       session: {
-        sessionId: `sess-${this.providers.selectedId}`,
+        sessionId: this.sessionId(),
         name: 'current',
         workspaceRoot: this.workspaceRoot,
         lastActivity: new Date().toISOString(),
@@ -153,23 +260,178 @@ export class CoreApp {
       context: {
         estimatedTokens: this.estimatedContextTokens,
         effectiveCapacity: capacity,
-        utilizationPercent: contextUtilizationPercent(this.estimatedContextTokens, capacity),
+        utilizationPercent: contextUtilizationPercentOrUnavailable(this.estimatedContextTokens, capacity),
         pinnedTurnCount: 0,
       },
     };
   }
 
-  setMode(mode: WorkMode): void {
-    this.mode = mode;
+  /** Mark whether the composer is idle (no pending input / no IME preedit).
+   * `setMode`/`setProfile`/`toggleMode` refuse to mutate authority while this
+   * is `false` (Story 2.1 AC #6) — the UI is responsible for calling this
+   * around composer/preedit lifecycle events. Defaults to idle, so existing
+   * callers (which already only call `setMode`/`setProfile` at natural idle
+   * points, e.g. after a submitted `/plan` command) are unaffected. */
+  setComposerBusy(busy: boolean): void {
+    this.activation.setComposerBusy(busy);
+  }
+
+  /** Only Work Mode changes; the authority revision increments; Plan is
+   * structurally read-only under every Profile (enforced by the PEP, not
+   * here). Refused (no state change, no revision bump) while the composer is
+   * busy (Story 2.1 AC #3, #6). Returns whether it actually applied. */
+  setMode(mode: WorkMode): boolean {
+    const result = this.activation.setMode(mode);
+    if (result.applied) this.recordAuthorityChange('mode', mode, result.state.revision);
+    return result.applied;
   }
 
   toggleMode(): WorkMode {
-    this.mode = this.mode === 'plan' ? 'build' : 'plan';
-    return this.mode;
+    const current = this.activation.snapshot().mode;
+    const next = current === 'plan' ? 'build' : 'plan';
+    this.setMode(next);
+    return this.activation.snapshot().mode;
   }
 
-  setProfile(profile: PermissionProfile): void {
-    this.profile = profile;
+  /** Only Permission Profile changes; the authority revision increments.
+   * Selecting a profile is NEVER itself approval, transfer consent, or a
+   * Boundary Expansion (Story 2.1 AC #4). Refused while the composer is busy
+   * (AC #6). Returns whether it actually applied. */
+  setProfile(profile: PermissionProfile): boolean {
+    const result = this.activation.setProfile(profile);
+    if (result.applied) this.recordAuthorityChange('profile', profile, result.state.revision);
+    return result.applied;
+  }
+
+  private recordAuthorityChange(field: 'mode' | 'profile', value: string, revision: number): void {
+    this.repo?.append(
+      durableEvent(
+        {
+          kind: 'AuthorityChanged',
+          activationId: this.activation.snapshot().activationId,
+          revision,
+          field,
+          value,
+        },
+        asSessionId(this.sessionId()),
+        { provenanceKind: 'deterministic', provenanceSource: 'runtime-activation', clock: this.clock },
+      ),
+    );
+  }
+
+  /** Story 2.1 AC #1, #5, AD-22: establish a fresh Runtime Activation —
+   * unique activation identity, authority reset to Manual, Full Access /
+   * temporary approvals / transfer consent / in-flight authority cleared.
+   * Called on Session create/open/switch and Workspace rebind. A prior
+   * activation's approvals/consent/Full Access can never authorize anything
+   * against the new activationId (`RuntimeActivation.authorizes` is keyed by
+   * activationId, not just revision). Any durable Boundary Expansion is
+   * NOT cleared here — it is merely revalidated by the caller against the
+   * (possibly new) Workspace, remaining separately inspectable (AC #5). */
+  beginNewActivation(reason: ActivationReason, workspaceRoot?: string): AuthorityProjection {
+    if (workspaceRoot !== undefined) {
+      this.workspace = workspaceIdentity(workspaceRoot);
+    }
+    this.activation = this.establishActivation(reason, this.workspace.workspaceId);
+    return this.authorityProjection();
+  }
+
+  /** Story 2.2: evaluate a proposed effect through the one local PEP. Journals
+   * `PolicyDecisionRecorded` Evidence (AC #5) when a repo is wired. Does NOT
+   * itself authorize execution — `authorizeEffect` is the only sanctioned
+   * path from a decision to permission-to-run (AC #6). */
+  evaluateEffect(actionClass: string, opts: { enforcementAvailable?: boolean } = {}): PepDecision {
+    const a = this.activation.snapshot();
+    const input: PepInput = {
+      actionClass,
+      state: { mode: a.mode, profile: a.profile, sensitiveOverride: a.sensitiveTransferOverride },
+      activationRevision: a.revision,
+      enforcementAvailable: opts.enforcementAvailable,
+    };
+    const decision = this.pep.evaluate(input);
+    this.repo?.append(
+      durableEvent(
+        {
+          kind: 'PolicyDecisionRecorded',
+          operationId: newOperationId(),
+          actionClass: decision.actionClass,
+          outcome: decision.outcome,
+          reason: decision.reason,
+          matrixVersion: decision.matrixVersion,
+          activationRevision: decision.activationRevision,
+        },
+        asSessionId(this.sessionId()),
+        { provenanceKind: 'deterministic', provenanceSource: 'pep', clock: this.clock },
+      ),
+    );
+    return decision;
+  }
+
+  /** Story 2.2 AC #6: the ONLY sanctioned way to turn a policy evaluation
+   * into permission to run an effect. Throws `EffectNotAuthorizedError` for
+   * any non-`allow` outcome. */
+  authorizeEffect(actionClass: string, opts: { enforcementAvailable?: boolean } = {}): PepDecision {
+    const a = this.activation.snapshot();
+    return this.effectExecutor.authorize({
+      actionClass,
+      state: { mode: a.mode, profile: a.profile, sensitiveOverride: a.sensitiveTransferOverride },
+      activationRevision: a.revision,
+      enforcementAvailable: opts.enforcementAvailable,
+    });
+  }
+
+  /** Story 2.3 AC #1, #2: evaluate a proposal against the non-overridable
+   * hard boundaries, independent of Work Mode/Permission Profile. */
+  checkBoundary(input: Omit<BoundaryCheckInput, 'workspaceRoot'> & { workspaceRoot?: string }): BoundaryDecision {
+    return checkHardBoundary({ workspaceRoot: this.workspaceRoot, ...input });
+  }
+
+  /** Story 2.3 AC #4: grant a durable Boundary Expansion, journaled as
+   * `BoundaryExpansionGranted` Evidence when a repo is wired. */
+  grantBoundaryExpansion(input: {
+    resourceIdentity: string;
+    actionClasses: readonly string[];
+    reason: string;
+    expiresAt?: string | null;
+  }): BoundaryExpansion {
+    const expansion = this.boundaryExpansions.grant({ ...input, workspaceId: this.workspace.workspaceId });
+    this.repo?.append(
+      durableEvent(
+        {
+          kind: 'BoundaryExpansionGranted',
+          expansionId: expansion.expansionId,
+          resourceIdentity: expansion.resourceIdentity,
+          workspaceId: expansion.workspaceId,
+          actionClasses: expansion.actionClasses,
+          reason: expansion.reason,
+          expiresAt: expansion.expiresAt,
+        },
+        asSessionId(this.sessionId()),
+        { provenanceKind: 'deterministic', provenanceSource: 'boundary-expansion', clock: this.clock },
+      ),
+    );
+    return expansion;
+  }
+
+  /** Story 2.3 AC #5: revoke a durable Boundary Expansion. Fail-closed —
+   * never claims a committed effect was cancelled. */
+  revokeBoundaryExpansion(expansionId: string, reason: string): boolean {
+    const ok = this.boundaryExpansions.revoke(expansionId, reason);
+    if (ok) {
+      this.repo?.append(
+        durableEvent(
+          { kind: 'BoundaryExpansionRevoked', expansionId, reason },
+          asSessionId(this.sessionId()),
+          { provenanceKind: 'deterministic', provenanceSource: 'boundary-expansion', clock: this.clock },
+        ),
+      );
+    }
+    return ok;
+  }
+
+  /** Story 2.3 AC #5: full, auditable inventory of Boundary Expansions. */
+  listBoundaryExpansions(): readonly BoundaryExpansion[] {
+    return this.boundaryExpansions.list();
   }
 
   /** `/models` listing: adapters with availability + reasons (ADR 0004). */
@@ -235,9 +497,10 @@ export class CoreApp {
     approve: ApprovalCallback = async () => false,
     onToken?: (delta: string) => void,
   ): Promise<string> {
+    const a = this.activation.snapshot();
     const result = await this.loop.runTurn(
       input,
-      { mode: this.mode, profile: this.profile, history: this.history },
+      { mode: a.mode, profile: a.profile, history: this.history },
       approve,
       onToken,
     );

@@ -64,3 +64,27 @@ export interface ConversationProjection {
   readonly transcript: readonly TranscriptTurnProjection[];
   readonly context: ContextProjection;
 }
+
+/**
+ * Runtime Activation / authority projection (Story 2.1 AC #2, AD-22, AD-28).
+ * Workspace identity, activation identity/revision, Work Mode, and Permission
+ * Profile are independently addressable fields — none of them implies any
+ * other. A separate contract from `StatusProjection` (rather than widening
+ * it) so existing Epic 1 consumers of `StatusProjection` are unaffected;
+ * Story 2.8's future base envelope may later fold these fields in.
+ */
+export interface AuthorityProjection {
+  readonly activationId: string;
+  readonly activationRevision: number;
+  readonly workspaceId: string;
+  readonly workMode: 'plan' | 'build';
+  readonly permissionProfile: 'manual' | 'assisted' | 'full-access';
+  readonly fullAccess: boolean;
+  /** The Full-Access-only sensitive-transfer override (ADR 0012) — separate
+   * authority from `fullAccess` itself per AD-17. */
+  readonly sensitiveTransferOverride: boolean;
+  /** Count of durable Boundary Expansions currently on record for this
+   * activation's Workspace (revoked/expired ones excluded) — AC #5. */
+  readonly activeBoundaryExpansionCount: number;
+  readonly enforcementVerified: boolean;
+}

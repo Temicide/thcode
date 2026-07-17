@@ -49,10 +49,19 @@ describe('provider registry (ADR 0004)', () => {
     expect(caps.modelId).toBeTruthy();
     expect(caps.provider).toBe('typhoon');
     expect(caps.inputModalities).toContain('text');
-    expect(caps.contextLimit).toBeGreaterThan(0);
     expect(typeof caps.supportsToolCalls).toBe('boolean');
     expect(typeof caps.supportsStreaming).toBe('boolean');
     expect(caps.dataHandling).toBeTruthy();
+  });
+
+  it('typhoon declares NO verified numeric context capacity (PR-4)', () => {
+    // QC fix 2026-07-17: before a sourced, verified Typhoon context limit
+    // exists, the adapter must not declare a usable numeric capacity — no
+    // `128k` raw limit or `115,200` fallback is a release commitment
+    // (epics.md Pre-Implementation Gate PR-4). `null` is the explicit
+    // "unverified" signal consumed by the null-aware context helpers.
+    const caps = new TyphoonAdapter().capabilities;
+    expect(caps.contextLimit).toBeNull();
   });
 
   it('typhoon degrades gracefully without a key (unavailable, never crash)', () => {

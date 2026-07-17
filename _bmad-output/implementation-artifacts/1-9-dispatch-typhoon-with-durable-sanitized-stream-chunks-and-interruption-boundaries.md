@@ -129,3 +129,21 @@ glm-5.2 (ollama-cloud)
 ### Change Log
 
 - 2026-07-17: Story 1.9 implemented — durable sanitized stream chunks, dispatch-commit linearization, interruption boundary with high-water mark, PR-1 invalid-proposal rejection freeze. `CoreApp.runTurn` wired to the durable path. 10 new tests (165 total passing). Build clean. Status → review.
+
+### QC fix 2026-07-17 — AC #3 gap closed
+
+**QC finding addressed:** the `NormalizedIntent` Evidence was computed and linked by `promptHash`+`promptRoundId` in memory (returned on `DispatchResult.intent`) but never journaled durably — only `PromptSubmitted` was appended. AC #3 requires the `NormalizedIntent` Evidence itself to be durable and attributable, not merely computable.
+
+**Fix:**
+- `cli/src/core/protocol/events.ts` — extended the existing `EvidenceRecordedPayload` (already part of `DURABLE_EVENT_KINDS`, previously unused by any producer) with `evidenceKind: 'normalized-intent'`, `promptRoundId`, `promptHash`, and a new `NormalizedIntentEvidence` shape (`version`, `outcome`, `constraints`, `references`, `verificationIntent`, `languageHint`, `ambiguity`) mirroring `agent/intent.ts`'s `NormalizedIntent` minus the fields that already live on the envelope. `evidenceKind` is an extension point for future Evidence kinds without breaking this one (AD-14 — no silent reinterpretation of an existing kind).
+- `cli/src/core/protocol/version.ts` — bumped `PROTOCOL_MINOR` from `0` to `1`. This is an additive, backward-compatible protocol extension (existing consumers reading only the fields they know about are unaffected); `PROTOCOL_MAJOR` is unchanged so `assertCompatibleVersion`'s fail-closed startup check (AD-2) is unaffected. `cli/test/protocol.test.ts` already asserts `protocolVersion()` against the constants dynamically, so no test hardcoded `1.0` needed updating.
+- `cli/src/core/agent/dispatch.ts` — added `sanitizeIntentEvidence(intent)`: runs every string-bearing field of the `NormalizedIntent` (`outcome`, each `constraints` entry, each reference's `raw`/`canonical`, `verificationIntent`) through `sanitizer.sanitize(value, 'user-content')` (Story 1.5 boundary, AD-24) before it is ever journaled; a field that fails to sanitize safely is replaced with `[redacted]` and the record's Evidence completeness downgrades from `complete` to `sanitized-with-omissions` (never silently passing raw content through, per Story 1.5 AC #2/#5 block-or-omit semantics).
+- `dispatchTyphoonTurn` now appends an `EvidenceRecorded` durable event (provenance `deterministic`/`intent-extractor`) immediately after intent extraction succeeds — linked by `promptHash` and `promptRoundId` — for both the immediate-dispatch path and the material-ambiguity clarification path (a NormalizedIntent still exists and is worth attributing even when dispatch is blocked by ambiguity). No event is appended when extraction itself fails, since no `NormalizedIntent` exists yet in that case.
+- `cli/test/dispatch.test.ts` — fixed a latent bug in the shared `fixedClock` test helper (string-padded seconds overflowed past `:59` once enough dispatch calls accumulated across the growing test file, producing an invalid ISO-8601 timestamp that the journal correctly rejected); replaced with real `Date` arithmetic so it stays valid indefinitely. Added 4 new Vitest cases: an `EvidenceRecorded` event is journaled and attributable by `promptRoundId`/`promptHash` for a normal dispatch; it is still journaled when material ambiguity blocks dispatch; a secret embedded in the prompt (`api_key: ...`) does not appear anywhere in the journaled intent Evidence (sanitized); every journaled `EvidenceRecorded` event carries a real `promptHash`.
+- Build clean; **186 passed across 17 files** (182 after the Story 1.10 QC fix + 4 new). No regressions.
+
+**File List (this fix):**
+- `cli/src/core/protocol/events.ts` (modified) — `EvidenceRecordedPayload` extended; new `NormalizedIntentEvidence` type.
+- `cli/src/core/protocol/version.ts` (modified) — `PROTOCOL_MINOR` 0 → 1.
+- `cli/src/core/agent/dispatch.ts` (modified) — `sanitizeIntentEvidence`, `EvidenceRecorded` append wired into `dispatchTyphoonTurn`.
+- `cli/test/dispatch.test.ts` (modified) — clock-overflow fix, 4 new Vitest cases.

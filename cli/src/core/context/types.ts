@@ -45,3 +45,32 @@ export function contextUtilizationPercent(estimatedTokens: number, capacity: num
   if (capacity <= 0) return 100;
   return Math.round((estimatedTokens / capacity) * 100);
 }
+
+/**
+ * Null-aware Effective Context Capacity (PR-4, epics.md Pre-Implementation
+ * Gate). `rawLimit` is a provider's verified raw context limit, or `null`
+ * when no sourced/verified limit exists (e.g. Typhoon today). `null` in ⇒
+ * the canonical `'percentage unavailable'` token out — never a `128k`/
+ * `115,200`-derived number. `effectiveContextCapacity()` itself stays
+ * available, unchanged, for the verified-limit case.
+ */
+export function effectiveContextCapacityOrUnavailable(
+  rawLimit: number | null,
+  configuredMaxOutput = 0,
+): number | 'percentage unavailable' {
+  if (rawLimit === null) return 'percentage unavailable';
+  return effectiveContextCapacity(rawLimit, configuredMaxOutput);
+}
+
+/**
+ * Null-aware Active Context Utilization percentage (PR-4). Propagates
+ * `'percentage unavailable'` from an unavailable capacity rather than
+ * computing a fabricated numeric percentage against an unverified capacity.
+ */
+export function contextUtilizationPercentOrUnavailable(
+  estimatedTokens: number,
+  capacity: number | 'percentage unavailable',
+): number | 'percentage unavailable' {
+  if (capacity === 'percentage unavailable') return 'percentage unavailable';
+  return contextUtilizationPercent(estimatedTokens, capacity);
+}

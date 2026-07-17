@@ -63,8 +63,102 @@ export interface OperationCancelledPayload { readonly kind: 'OperationCancelled'
 export interface OperationUnknownOutcomePayload { readonly kind: 'OperationUnknownOutcome'; readonly operationId: string }
 export interface HealthChangedPayload { readonly kind: 'HealthChanged'; readonly providerId: string; readonly state: HealthState }
 export interface CapabilityChangedPayload { readonly kind: 'CapabilityChanged'; readonly id: string; readonly state: string }
-export interface EvidenceRecordedPayload { readonly kind: 'EvidenceRecorded'; readonly operationId: string; readonly completeness: EvidenceCompleteness }
+/**
+ * Sanitized snapshot of a `NormalizedIntent` (Story 1.5 sanitization boundary
+ * applied before persistence — no raw prompt bytes beyond what already
+ * cleared the boundary, no secrets). Mirrors `agent/intent.ts`'s
+ * `NormalizedIntent` shape minus `promptRoundId`/`promptHash`/`createdAt`,
+ * which live on the envelope/payload directly.
+ */
+export interface NormalizedIntentEvidence {
+  readonly version: number;
+  readonly outcome: string | null;
+  readonly constraints: readonly string[];
+  readonly references: readonly { readonly kind: string; readonly raw: string; readonly canonical?: string }[];
+  readonly verificationIntent: string | null;
+  readonly languageHint: string;
+  readonly ambiguity: 'none' | 'material' | null;
+}
+
+/**
+ * `EvidenceRecorded` (protocol 1.1, additive/backward-compatible — AD-3,
+ * AD-7). `evidenceKind` is an extension point: `'normalized-intent'` closes
+ * Story 1.9 AC #3 (the derived `NormalizedIntent` is linked to `promptHash` +
+ * `promptRoundId` and journaled durably, not just referenced). Future
+ * Evidence kinds add variants without breaking this one (AD-14 — no silent
+ * reinterpretation of an existing kind).
+ */
+export interface EvidenceRecordedPayload {
+  readonly kind: 'EvidenceRecorded';
+  readonly operationId: string;
+  readonly completeness: EvidenceCompleteness;
+  readonly evidenceKind: 'normalized-intent';
+  readonly promptRoundId: string;
+  readonly promptHash: string;
+  readonly intent: NormalizedIntentEvidence;
+}
 export interface ContextCompactedPayload { readonly kind: 'ContextCompacted'; readonly targetPercent: number }
+
+// --- Epic 2: Runtime Activation, PEP, and Boundary events (AD-12, AD-13,
+// AD-17, AD-18, AD-22, Stories 2.1-2.3). Literal mode/profile unions are
+// redeclared here (not imported from permissions/types.ts) following the
+// existing convention of this file (see HealthState above) so the protocol
+// layer stays the dependency root.
+
+/** A fresh Runtime Activation is established (AD-22, Story 2.1 AC #1).
+ * Recorded BEFORE any approval can be requested against it. */
+export interface RuntimeActivationEstablishedPayload {
+  readonly kind: 'RuntimeActivationEstablished';
+  readonly activationId: string;
+  readonly workspaceId: string;
+  readonly mode: 'plan' | 'build';
+  readonly profile: 'manual' | 'assisted' | 'full-access';
+  readonly reason: 'process-start' | 'session-create' | 'session-open' | 'session-switch' | 'workspace-rebind';
+}
+
+/** Work Mode or Permission Profile changed within the current activation
+ * (Story 2.1 AC #3, #4). Each mutation increments `revision`; the two fields
+ * are independently addressable and this event never conflates them. */
+export interface AuthorityChangedPayload {
+  readonly kind: 'AuthorityChanged';
+  readonly activationId: string;
+  readonly revision: number;
+  readonly field: 'mode' | 'profile';
+  readonly value: string;
+}
+
+/** A PEP policy decision (Story 2.2 AC #1, #2, #5, AD-12). Deterministic,
+ * attributable to the exact matrix version and activation revision. */
+export interface PolicyDecisionRecordedPayload {
+  readonly kind: 'PolicyDecisionRecorded';
+  readonly operationId: string;
+  readonly actionClass: string;
+  readonly outcome: 'allow' | 'ask' | 'deny';
+  readonly reason: string;
+  readonly matrixVersion: number;
+  readonly activationRevision: number;
+}
+
+/** A durable Boundary Expansion was granted (Story 2.3 AC #4). Separately
+ * scoped from temporary approval or transfer consent (AD-17). */
+export interface BoundaryExpansionGrantedPayload {
+  readonly kind: 'BoundaryExpansionGranted';
+  readonly expansionId: string;
+  readonly resourceIdentity: string;
+  readonly workspaceId: string;
+  readonly actionClasses: readonly string[];
+  readonly reason: string;
+  readonly expiresAt: string | null;
+}
+
+/** A durable Boundary Expansion was revoked (Story 2.3 AC #5). Revocation
+ * prevents future authorization; it never claims a committed effect was
+ * cancelled. */
+export interface BoundaryExpansionRevokedPayload {
+  readonly kind: 'BoundaryExpansionRevoked';
+  readonly expansionId: string;
+  readonly reason: string;
+}
 
 export type DurableEventPayload =
   | PromptSubmittedPayload
@@ -79,13 +173,19 @@ export type DurableEventPayload =
   | HealthChangedPayload
   | CapabilityChangedPayload
   | EvidenceRecordedPayload
-  | ContextCompactedPayload;
+  | ContextCompactedPayload
+  | RuntimeActivationEstablishedPayload
+  | AuthorityChangedPayload
+  | PolicyDecisionRecordedPayload
+  | BoundaryExpansionGrantedPayload
+  | BoundaryExpansionRevokedPayload;
 
 export const DURABLE_EVENT_KINDS = [
   'PromptSubmitted', 'ChatInterrupted', 'RemoteOutputObserved', 'EffectDispatchCommitted',
   'OperationSucceeded', 'OperationFailed', 'OperationBlocked', 'OperationCancelled',
   'OperationUnknownOutcome', 'HealthChanged', 'CapabilityChanged', 'EvidenceRecorded',
-  'ContextCompacted',
+  'ContextCompacted', 'RuntimeActivationEstablished', 'AuthorityChanged',
+  'PolicyDecisionRecorded', 'BoundaryExpansionGranted', 'BoundaryExpansionRevoked',
 ] as const;
 
 export type DurableEventKind = (typeof DURABLE_EVENT_KINDS)[number];
@@ -115,4 +215,9 @@ export const _DURABLE_EXHAUSTIVE: Record<DurableEventPayload['kind'], true> = {
   CapabilityChanged: true,
   EvidenceRecorded: true,
   ContextCompacted: true,
+  RuntimeActivationEstablished: true,
+  AuthorityChanged: true,
+  PolicyDecisionRecorded: true,
+  BoundaryExpansionGranted: true,
+  BoundaryExpansionRevoked: true,
 };

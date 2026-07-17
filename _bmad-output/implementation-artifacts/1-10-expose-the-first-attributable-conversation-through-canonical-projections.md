@@ -113,3 +113,17 @@ glm-5.2 (ollama-cloud)
 ### Change Log
 
 - 2026-07-17: Story 1.10 implemented — canonical `ConversationProjection`, `CoreApp.query()` facade, UI consumes projections, health state visible. 5 new tests (170 total passing). Build clean. Status → review. Epic 1 complete.
+
+### QC fix 2026-07-17
+
+**QC verdict addressed:** `cli/src/core/providers/typhoon.ts:23` hardcoded `contextLimit: 128_000`, which flowed through `effectiveContextCapacity()` to a fabricated 115,200-token denominator, and `CoreApp.statusProjection()`/`query()` emitted a numeric `contextPercent` rendered by `cli/src/ui/App.tsx` as `Ctx N%` — a PR-4 violation (epics.md Pre-Implementation Gate: no `128k` raw limit or `115,200` fallback capacity is a release commitment without a named provider/product decision and source).
+
+**Fix:**
+- `cli/src/core/providers/types.ts` — `ProviderCapabilities.contextLimit` is now `number | null`. `null` is the explicit "unverified" signal; documented inline that consumers must surface `'percentage unavailable'` rather than deriving a numeric percentage from it.
+- `cli/src/core/providers/typhoon.ts` — `contextLimit` changed from the literal `128_000` to `null`. No sourced, verified Typhoon context limit exists yet, so the adapter declares none.
+- `cli/src/core/context/types.ts` — added `effectiveContextCapacityOrUnavailable(rawLimit: number | null, ...)` and `contextUtilizationPercentOrUnavailable(estimatedTokens, capacity)`, both propagating the literal `'percentage unavailable'` token when the input is `null`/unavailable. The original `effectiveContextCapacity()`/`contextUtilizationPercent()` are unchanged and remain the path used once a verified limit is injected — nothing calls them with the removed `128_000` literal anymore.
+- `cli/src/core/app.ts` — `status()`, `statusProjection()`, and `query()` now call the null-aware helpers instead of `effectiveContextCapacity()` directly. `CoreStatus.contextPercent` is now typed `number | 'percentage unavailable'` (was `number`), matching `StatusProjection`/`ContextProjection` which already carried that union.
+- `cli/src/ui/App.tsx` — added an exported pure `formatContextPercent(contextPercent)` helper; the status row now renders its output instead of interpolating `Ctx {status.contextPercent}%` directly, so an unverified capacity renders the literal token `percentage unavailable` verbatim rather than `Ctx percentage unavailable%` or any fabricated number.
+- `cli/test/providers.test.ts` — replaced the `contextLimit > 0` assumption with a test asserting Typhoon's `contextLimit` is `null` (PR-4).
+- `cli/test/context-capacity.test.ts` (new) — 9 Vitest cases proving: (a) `statusProjection()`, `query()`, and legacy `status()` all carry the literal `'percentage unavailable'` token with no numeric percent, and no `128000`/`115200`-derived number appears anywhere in the serialized projection; (b) the UI's `formatContextPercent` renders the literal token verbatim for both a direct call and CoreApp's live Typhoon output — never a fabricated `Ctx N%`; (c) a hypothetical verified-limit adapter (100,000 tokens, deliberately not `128_000`/`115_200`) produces a real numeric percent end to end through `CoreApp`, and the null-aware helpers compute correctly for both the verified and unverified cases directly.
+- Build clean; **182 passed across 17 files** (172 baseline + 1 modified assertion in `providers.test.ts` bringing that file to 9 + 9 new in `context-capacity.test.ts`). No regressions.

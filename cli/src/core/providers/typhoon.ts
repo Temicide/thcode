@@ -20,7 +20,13 @@ export class TyphoonAdapter implements ProviderAdapter {
     modelId: 'typhoon-v2.5-instruct',
     provider: 'typhoon',
     inputModalities: ['text'],
-    contextLimit: 128_000,
+    // PR-4 (epics.md Pre-Implementation Gate): no sourced, verified Typhoon
+    // context limit exists yet. `null` is the explicit "unverified" signal —
+    // no `128k` raw limit or `115,200` fallback capacity may be assumed as a
+    // release commitment. `effectiveContextCapacity()` remains available for
+    // when a verified limit is later sourced and injected here; nothing may
+    // call it with this unverified literal in the meantime.
+    contextLimit: null,
     supportsToolCalls: true,
     supportsStreaming: true,
     dataHandling: 'Requests sent directly from this machine to api.opentyphoon.ai; key stays local (ADR 0007).',

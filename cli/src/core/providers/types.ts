@@ -15,8 +15,15 @@ export interface ProviderCapabilities {
   readonly modelId: string;
   readonly provider: string;
   readonly inputModalities: readonly Modality[];
-  /** Verified raw context limit in tokens (denominator basis for ADR 0015). */
-  readonly contextLimit: number;
+  /**
+   * Verified raw context limit in tokens (denominator basis for ADR 0015).
+   * `null` means no sourced, verified limit exists yet for this provider/model
+   * (PR-4, epics.md Pre-Implementation Gate): no `128k` raw limit or `115,200`
+   * fallback capacity may be assumed as a release commitment. Consumers MUST
+   * treat `null` as "unverified" and surface the canonical `percentage
+   * unavailable` token rather than deriving a numeric percentage from it.
+   */
+  readonly contextLimit: number | null;
   readonly supportsToolCalls: boolean;
   readonly supportsStreaming: boolean;
   /** Data-handling note surfaced by `/models` and `/status`. */
