@@ -197,6 +197,10 @@ import {
   type SpecialistHealthSnapshot,
 } from './specialists/health/index.js';
 import {
+  routeSpecialistPrompt,
+  type RoutingDecision,
+} from './specialists/routing/index.js';
+import {
   listCheckpoints,
   inspectCheckpoint,
   analyzeRollbackSet,
@@ -1707,6 +1711,23 @@ export class CoreApp {
       this._capabilityRegistry = CapabilityRegistry.load(now ?? this.clock());
     }
     return this._capabilityRegistry;
+  }
+
+  /** Story 4.5: route a natural-language prompt to a RoutingDecision. */
+  routeSpecialistPrompt(prompt: string): RoutingDecision {
+    const registry = this.capabilityRegistry();
+    const healthMap = this.buildHealthMap();
+    const isTTY = typeof process !== 'undefined' && process.stdout && process.stdout.isTTY !== false;
+    return routeSpecialistPrompt(
+      prompt,
+      registry,
+      {
+        isTTY,
+        healthMap,
+        disabledSet: this._disabledServices,
+      },
+      this.clock,
+    );
   }
 
   /** `/tools` view of the Catalog Manifest (ADR 0011). */
