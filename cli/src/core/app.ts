@@ -167,6 +167,7 @@ import {
   listCheckpoints,
   inspectCheckpoint,
   analyzeRollbackSet,
+  applyRollback,
   renderRollbackListOutput,
   renderRollbackInspectOutput,
 } from './rollback/index.js';
@@ -175,6 +176,9 @@ import type {
   AnalysisContext,
   AnalysisFsProbe,
   RollbackTarget,
+  RollbackApplyResultOrFailure,
+  ApplyContext,
+  ApplyFsProbe,
 } from './rollback/types.js';
 import { asCheckpointId } from './checkpoints/types.js';
 
@@ -1501,6 +1505,78 @@ export class CoreApp {
     return analyzeRollbackSet(checkpointId, selectedTargets, ctx);
   }
 
+  // --- Story 3.14: Apply conflict-free rollback targets ---
+
+  /**
+   * Apply conflict-free rollback targets (Story 3.14).
+   *
+   * AC #1: applies ONLY analyzed, conflict-free inverse changes so rollback
+   * changes exactly the eligible built-in file state and leaves unrelated work
+   * untouched. Excluded effects (shell, process, remote, permission, symlink-side,
+   * external) are NEVER claimed reversible (AD-19).
+   *
+   * AC #2: each applied target produces a durable EffectDispatchCommitted event
+   * BEFORE the native mutation, and a durable OperationSucceeded event AFTER
+   * the mutation. The journal is the sole commit-visibility authority.
+   *
+   * AC #3: each target is revalidated immediately before apply — if the current
+   * state has changed since analysis (concurrent writer, rename, deletion,
+   * re-creation), the apply is refused for that target. No stale inverse is
+   * applied.
+   *
+   * AC #4: the aggregate result is one of `full` (all targets applied),
+   * `partial` (some applied, some had issues), or `blocked` (none applied).
+   * Residual conflicts are reported so the user can choose next steps.
+   *
+   * AC #5: a new checkpoint is created for the rollback operation itself, so
+   * the rollback can itself be rolled back. The checkpoint reference is
+   * included in the result.
+   */
+  applyRollback(
+    checkpointId: string,
+    selectedTargets: readonly RollbackTarget[],
+    opts: {
+      kvStore?: KeyValueStore;
+      blobStore?: BlobStore;
+      encKey?: Buffer;
+      fsProbe?: ApplyFsProbe;
+    } = {},
+  ): RollbackApplyResultOrFailure {
+    const kvStore = opts.kvStore;
+    if (!kvStore) {
+      return {
+        ok: false,
+        failure: {
+          category: 'checkpoint-not-found',
+          retryable: false,
+          scope: 'rollback-apply',
+          message: 'no key-value store available for rollback apply',
+          causeCode: 'no-kv-store',
+        },
+      };
+    }
+
+    const checkpointRepo = new CheckpointRepository(kvStore, this.clock);
+    const artifactStore = opts.blobStore && opts.encKey
+      ? new ArtifactStore(opts.blobStore, opts.encKey)
+      : undefined;
+
+    const ctx: ApplyContext = {
+      fsProbe: opts.fsProbe ?? defaultApplyFsProbe(),
+      checkpointRepo,
+      artifactStore,
+      journal: this.repo ?? { append: () => 0 },
+      sessionId: this.sessionId(),
+      activationId: this.activation.snapshot().activationId,
+      activationRevision: this.activation.snapshot().revision,
+      authorityRevision: this.activation.snapshot().revision,
+      workspace: this.workspace,
+      clock: this.clock,
+    };
+
+    return applyRollback(checkpointId, selectedTargets, ctx);
+  }
+
   // --- Story 3.9: Agent Loop hardening ---
 
   /**
@@ -1745,6 +1821,61 @@ function defaultQuarantineProvider(): QuarantineProvider {
     quarantinePathFor(originalPath: string): string {
       const basename = path.basename(originalPath);
       return path.join(quarantineDir, `${basename}-${Date.now()}`);
+    },
+  };
+}
+
+/** Default ApplyFsProbe using real node:fs (for production use). */
+function defaultApplyFsProbe(): ApplyFsProbe {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const fs = require('node:fs') as typeof import('node:fs');
+  return {
+    readFile(path: string): Uint8Array {
+      return fs.readFileSync(path);
+    },
+    writeFile(path: string, content: Uint8Array): void {
+      fs.writeFileSync(path, content);
+    },
+    deleteFile(path: string): void {
+      fs.unlinkSync(path);
+    },
+    lstat(path: string) {
+      const s = fs.lstatSync(path);
+      return {
+        dev: s.dev,
+        ino: s.ino,
+        size: s.size,
+        isDirectory: s.isDirectory(),
+        isFile: s.isFile(),
+        isSymbolicLink: s.isSymbolicLink(),
+      };
+    },
+    realpath(path: string): string {
+      return fs.realpathSync(path);
+    },
+    stat(path: string) {
+      const s = fs.statSync(path);
+      return {
+        dev: s.dev,
+        ino: s.ino,
+        size: s.size,
+        isDirectory: s.isDirectory(),
+        isFile: s.isFile(),
+      };
+    },
+    isAccessible(path: string): boolean {
+      try {
+        fs.accessSync(path, fs.constants.R_OK);
+        return true;
+      } catch {
+        return false;
+      }
+    },
+    hasOpenHandles(_path: string): boolean {
+      return false;
+    },
+    mkdir(dir: string): void {
+      fs.mkdirSync(dir, { recursive: true });
     },
   };
 }

@@ -9,6 +9,8 @@
 
 import type { CheckpointId, IntegrityState } from '../checkpoints/types.js';
 import type { PromptRoundId } from '../protocol/ids.js';
+import type { WorkspaceIdentity } from '../workspace/types.js';
+import type { DurableEvent } from '../protocol/events.js';
 
 // --- Excluded effects (AD-19) ---
 
@@ -317,3 +319,150 @@ export interface AnalysisFailure {
 export type AnalyzeRollbackResult =
   | { readonly ok: true; readonly analysis: RollbackAnalysis }
   | { readonly ok: false; readonly failure: AnalysisFailure };
+
+// --- Story 3.14: Apply conflict-free rollback targets ---
+
+/**
+ * Injectable filesystem probe for rollback apply.
+ * Extends the workspace FsProbe with write, delete, accessibility, and
+ * open-handle checks needed for applying inverse operations.
+ */
+export interface ApplyFsProbe {
+  readFile(path: string): Uint8Array;
+  writeFile(path: string, content: Uint8Array): void;
+  deleteFile(path: string): void;
+  lstat(path: string): {
+    dev: number;
+    ino: number;
+    size: number;
+    isDirectory: boolean;
+    isFile: boolean;
+    isSymbolicLink: boolean;
+  };
+  realpath(path: string): string;
+  stat(path: string): {
+    dev: number;
+    ino: number;
+    size: number;
+    isDirectory: boolean;
+    isFile: boolean;
+  };
+  isAccessible(path: string): boolean;
+  hasOpenHandles(path: string): boolean;
+  mkdir(dir: string): void;
+}
+
+/**
+ * Per-target outcome of applying a rollback inverse operation.
+ * - `applied`: the inverse operation was applied successfully.
+ * - `skipped`: target was explicitly excluded or not covered.
+ * - `conflict`: current state differs from expected — no change made.
+ * - `inaccessible`: cannot read/write current state.
+ * - `mismatch`: identity changed (renamed, recreated, case/unicode).
+ * - `unknown-outcome`: concurrency/open-handle state uncertain.
+ */
+export type ApplyTargetOutcome =
+  | {
+      readonly kind: 'applied';
+      readonly target: { readonly canonicalPath: string; readonly displayPath: string };
+      readonly inverseOperation: InverseOperation;
+      readonly preImageDigest: string | null;
+      readonly postImageDigest: string | null;
+    }
+  | {
+      readonly kind: 'skipped';
+      readonly target: { readonly canonicalPath: string; readonly displayPath: string };
+      readonly reason: string;
+    }
+  | {
+      readonly kind: 'conflict';
+      readonly target: { readonly canonicalPath: string; readonly displayPath: string };
+      readonly reason: string;
+      readonly reasonCode: string;
+      readonly safeChoices: readonly SafeChoice[];
+    }
+  | {
+      readonly kind: 'inaccessible';
+      readonly target: { readonly canonicalPath: string; readonly displayPath: string };
+      readonly reason: string;
+      readonly causeCode: string;
+    }
+  | {
+      readonly kind: 'mismatch';
+      readonly target: { readonly canonicalPath: string; readonly displayPath: string };
+      readonly reason: string;
+      readonly reasonCode: string;
+    }
+  | {
+      readonly kind: 'unknown-outcome';
+      readonly target: { readonly canonicalPath: string; readonly displayPath: string };
+      readonly reason: string;
+    };
+
+/**
+ * Aggregate result type for a rollback apply operation.
+ * - `full`: all selected targets were applied successfully.
+ * - `partial`: some targets applied, some had issues.
+ * - `blocked`: no targets could be applied.
+ */
+export type RollbackApplyResultType = 'full' | 'partial' | 'blocked';
+
+/**
+ * Result of applying a set of rollback inverse operations.
+ * Includes per-target outcomes, aggregate type, residual conflicts,
+ * excluded effects, and checkpoint reference.
+ */
+export interface RollbackApplyResult {
+  readonly checkpointId: CheckpointId;
+  readonly aggregate: RollbackApplyResultType;
+  readonly perTarget: readonly ApplyTargetOutcome[];
+  readonly appliedCount: number;
+  readonly skippedCount: number;
+  readonly conflictCount: number;
+  readonly inaccessibleCount: number;
+  readonly mismatchCount: number;
+  readonly unknownCount: number;
+  readonly residualConflicts: readonly {
+    readonly target: { readonly canonicalPath: string; readonly displayPath: string };
+    readonly reason: string;
+    readonly reasonCode: string;
+    readonly safeChoices: readonly SafeChoice[];
+  }[];
+  readonly excludedEffects: ExcludedEffects;
+  readonly checkpointCreated: boolean;
+  readonly checkpointIdAfter?: CheckpointId;
+}
+
+/**
+ * Context for rollback apply (injectable dependencies).
+ */
+export interface ApplyContext {
+  readonly fsProbe: ApplyFsProbe;
+  readonly checkpointRepo: import('../checkpoints/checkpointRepository.js').CheckpointRepository;
+  readonly artifactStore?: import('../checkpoints/artifactStore.js').ArtifactStore;
+  readonly journal: { append(event: DurableEvent): number };
+  readonly sessionId: string;
+  readonly activationId: string;
+  readonly activationRevision: number;
+  readonly authorityRevision: number;
+  readonly workspace: WorkspaceIdentity;
+  readonly clock: () => string;
+}
+
+// --- AD-9 typed failure envelope for apply ---
+
+export type ApplyFailureCategory = 'checkpoint-not-found' | 'checkpoint-unreadable' | 'internal-error';
+
+export interface ApplyFailure {
+  readonly category: ApplyFailureCategory;
+  readonly retryable: boolean;
+  readonly scope: 'rollback-apply';
+  readonly message: string;
+  readonly causeCode: string;
+}
+
+// --- Apply result (top-level) ---
+
+export type RollbackApplyResultOrFailure =
+  | { readonly ok: true; readonly result: RollbackApplyResult }
+  | { readonly ok: false; readonly failure: ApplyFailure };
