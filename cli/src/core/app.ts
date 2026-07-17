@@ -201,6 +201,18 @@ import {
   type RoutingDecision,
 } from './specialists/routing/index.js';
 import {
+  buildSpecialistPreparedPayloadManifest,
+  requestSpecialistTransferConsent,
+  revalidateSpecialistTransferConsent as revalidateSpecialistConsent,
+  type SpecialistManifestInput,
+  type SpecialistConsentInput,
+  type SpecialistRevalidationInput,
+  type ConsentEvaluationResult,
+  type PreparedPayloadManifest,
+  type TransferConsent,
+} from './specialists/consent/index.js';
+import type { PreparedArtifact } from './specialists/artifacts/types.js';
+import {
   SpecialistArtifactResolver,
   type ArtifactResolutionResult,
   type MinimizationResult,
@@ -462,6 +474,127 @@ export class CoreApp {
 
     this._specialistHealth.register(result.configuration);
     return this._specialistHealth.check(serviceId);
+  }
+
+  // --- Story 4.8: Specialist transfer consent ---
+
+  /**
+   * Prepare a Specialist payload manifest from resolved/minimized artifacts.
+   * Loads the registry entry + effective configuration via existing accessors,
+   * then builds the PreparedPayloadManifest with both canonical manifest digest
+   * and exact payload-byte digest.
+   *
+   * Returns the manifest directly. If the configuration build fails, throws a
+   * typed error (caller should catch and handle).
+   */
+  async prepareSpecialistPayload(
+    serviceId: string,
+    preparedArtifacts: readonly PreparedArtifact[],
+    operationId: string,
+    promptRoundId: string,
+    opts: {
+      readonly callCount?: number;
+      readonly expiresAt?: string | null;
+    } = {},
+  ): Promise<PreparedPayloadManifest> {
+    const registry = this.capabilityRegistry();
+    if (!registry.ok) {
+      throw new Error('Capability Registry is not loaded.');
+    }
+
+    const entry = registry.byId(serviceId);
+    if (!entry) {
+      throw new Error(`Service "${serviceId}" not found in the Capability Registry.`);
+    }
+
+    const configResult = await this.buildSpecialistConfiguration(serviceId);
+    if (!configResult.ok) {
+      throw new Error(`Failed to build configuration for "${serviceId}": ${configResult.detail}`);
+    }
+
+    const proposal = {
+      serviceId,
+      name: entry.nameEnglish,
+      rationale: `Specialist transfer to ${entry.nameEnglish} (${serviceId})`,
+    };
+
+    const input: SpecialistManifestInput = {
+      proposal,
+      preparedArtifacts,
+      effectiveConfiguration: configResult.configuration,
+      registryEntry: entry,
+      operationId,
+      promptRoundId,
+      callCount: opts.callCount ?? 1,
+      expiresAt: opts.expiresAt ?? null,
+    };
+
+    return buildSpecialistPreparedPayloadManifest(input);
+  }
+
+  /**
+   * Request Specialist transfer consent. Wires activation/authority context
+   * from the current Runtime Activation and computes the sanitizer result from
+   * the prepared artifacts' text content.
+   *
+   * For text artifacts, joins the text content and runs it through the sanitizer
+   * with contentClass 'remote-payload'. For binary artifacts, contributes an
+   * empty string (safe). This ensures unsafe-payload detection for text payloads
+   * while relying on manifest digest binding for binary payloads.
+   */
+  async requestSpecialistTransferConsent(
+    manifest: PreparedPayloadManifest,
+    preparedArtifacts: readonly PreparedArtifact[],
+    currentPayloadByteDigest: string,
+  ): Promise<ConsentEvaluationResult> {
+    const a = this.activation.snapshot();
+    const auth = this.authorityProjection();
+
+    // Compute sanitizer result from text artifacts' joined text.
+    const joinedText = preparedArtifacts
+      .filter((art) => art.contentKind === 'text' && art.text !== undefined)
+      .map((art) => art.text!)
+      .join('\n');
+    const sanitizerResult = sanitizer.sanitize(joinedText, 'remote-payload');
+
+    const input: SpecialistConsentInput = {
+      manifest,
+      activationId: auth.activationId,
+      activationRevision: auth.activationRevision,
+      authorityRevision: a.revision,
+      policyVersion: 1,
+      clock: this.clock,
+      currentPayloadByteDigest,
+      now: this.clock(),
+      sanitizerResult,
+    };
+
+    return requestSpecialistTransferConsent(input);
+  }
+
+  /**
+   * Revalidate a granted Specialist transfer consent immediately before
+   * transport. Checks activation/authority context and re-runs consent
+   * evaluation against the current manifest + payload digest.
+   */
+  async revalidateSpecialistTransferConsent(
+    consent: TransferConsent,
+    manifest: PreparedPayloadManifest,
+    currentPayloadByteDigest: string,
+  ): Promise<ConsentEvaluationResult> {
+    const a = this.activation.snapshot();
+    const auth = this.authorityProjection();
+
+    const current: SpecialistRevalidationInput = {
+      manifest,
+      currentPayloadByteDigest,
+      activationId: auth.activationId,
+      activationRevision: auth.activationRevision,
+      authorityRevision: a.revision,
+      now: this.clock(),
+    };
+
+    return revalidateSpecialistConsent(consent, current);
   }
 
   // --- Story 4.3: AI-for-Thai credential JIT onboarding ---
