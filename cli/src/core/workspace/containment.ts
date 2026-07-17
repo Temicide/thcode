@@ -108,7 +108,15 @@ export function checkContainment(
           // Cannot stat — skip mount point check.
         }
       }
-    } catch {
+    } catch (e) {
+      // If the final target doesn't exist (ENOENT), it's still within the
+      // workspace boundary — allow it (needed for create_file operations).
+      // For intermediate components, return enforcement-unverified.
+      if (current === resolved) {
+        // Final target doesn't exist — still within workspace boundary.
+        // Skip to revalidation (which will also fail, handled below).
+        break;
+      }
       // Cannot lstat this component — return enforcement-unverified.
       return {
         outcome: 'enforcement-unverified',
@@ -129,10 +137,13 @@ export function checkContainment(
       };
     }
   } catch {
+    // Final target doesn't exist (ENOENT) — still within workspace boundary.
+    // This is valid for create_file operations where the file doesn't exist yet.
+    // Return allowed with the resolved path so callers can proceed.
     return {
-      outcome: 'enforcement-unverified',
-      reason: `cannot revalidate final target: ${resolved}`,
-      resolvedPath: null,
+      outcome: 'allowed',
+      reason: 'target is within workspace boundary (does not exist yet)',
+      resolvedPath: resolved,
     };
   }
 

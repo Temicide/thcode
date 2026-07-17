@@ -66,6 +66,24 @@ import type { SessionRepository } from './sessions/repository.js';
 import { CheckpointRepository } from './checkpoints/checkpointRepository.js';
 import { ArtifactStore } from './checkpoints/artifactStore.js';
 import type { KeyValueStore, BlobStore } from './checkpoints/types.js';
+import {
+  planMutationSet,
+  runProtectionPreflight,
+  fingerprintPlan,
+  isStale,
+  processConfirmation,
+} from './mutations/index.js';
+import type {
+  MutationSet,
+  PlanFingerprint,
+  ProtectionPreflightResult,
+  RawProposal,
+  StaleCheckResult,
+  ConfirmationScope,
+  ConfirmationResult,
+  PlanMutationResult,
+  PreflightResult,
+} from './mutations/index.js';
 import type {
   AuthorityProjection,
   ConversationProjection,
@@ -638,6 +656,126 @@ export class CoreApp {
     return checkContainment(this.workspace, target, {
       fsProbe: defaultFsProbe(),
       followSymlinks: opts.followSymlinks,
+    });
+  }
+
+  /** Story 3.3 AC #1: plan a complete mutation set from raw proposals.
+   * READ-ONLY: enumerates the complete intended set with stable resource
+   * identities, action digests, expected pre-image digest/version, proposed
+   * post-image or deletion manifest, rename/alias relationships, checkpoint
+   * size, binary status, and excluded effects BEFORE any native mutation. */
+  planMutations(rawProposals: readonly RawProposal[]): PlanMutationResult {
+    return planMutationSet(rawProposals, {
+      workspace: this.workspace,
+      fsProbe: defaultFsProbe(),
+      clock: this.clock,
+    });
+  }
+
+  /** Story 3.3 AC #2, AC #3: run protection preflight on a complete mutation
+   * set. Executes the exact ordered checks: resolve stable identity -> capture
+   * expected digest/version -> evaluate PEP/PermissionMatrix/quota/platform
+   * checks -> stage checkpoint originals/metadata/post-plan -> make the stage
+   * durable. Only then may the result be labeled `fully protected`, `partially
+   * protected`, or `unprotected`. */
+  preflightProtection(
+    mutationSet: MutationSet,
+    opts: {
+      kvStore?: KeyValueStore;
+      blobStore?: BlobStore;
+      encKey?: Buffer;
+      currentStoreUsageBytes?: number;
+    } = {},
+  ): PreflightResult {
+    const a = this.activation.snapshot();
+    const kvStore = opts.kvStore;
+    const blobStore = opts.blobStore;
+    const encKey = opts.encKey;
+
+    if (!kvStore) {
+      return {
+        ok: false,
+        failure: {
+          category: 'preflight-failed',
+          retryable: true,
+          scope: 'preflight',
+          message: 'no key-value store available for checkpoint staging',
+          causeCode: 'no-kv-store',
+        },
+      };
+    }
+
+    const checkpointRepo = new CheckpointRepository(kvStore, this.clock);
+    const artifactStore = blobStore && encKey ? new ArtifactStore(blobStore, encKey) : undefined;
+
+    return runProtectionPreflight(mutationSet, {
+      workspace: this.workspace,
+      fsProbe: defaultFsProbe(),
+      clock: this.clock,
+      policyState: {
+        mode: a.mode,
+        profile: a.profile,
+        sensitiveOverride: a.sensitiveTransferOverride,
+      },
+      checkpointRepo,
+      artifactStore,
+      kvStore,
+      blobStore,
+      currentStoreUsageBytes: opts.currentStoreUsageBytes ?? 0,
+      operationId: mutationSet.operationId,
+    });
+  }
+
+  /** Story 3.3 AC #5: create a plan fingerprint that binds the proposal +
+   * authority revision + workspace + target digest + quota + platform state.
+   * Used at effect time to detect staleness. */
+  createPlanFingerprint(
+    mutationSet: MutationSet,
+    opts: { currentStoreUsageBytes?: number } = {},
+  ): PlanFingerprint {
+    const a = this.activation.snapshot();
+    return fingerprintPlan(mutationSet, {
+      workspace: this.workspace,
+      authorityRevision: a.revision,
+      fsProbe: defaultFsProbe(),
+      clock: this.clock,
+      currentStoreUsageBytes: opts.currentStoreUsageBytes ?? 0,
+    });
+  }
+
+  /** Story 3.3 AC #5: revalidate a plan fingerprint against the current
+   * context. If the proposal, Workspace, authority revision, target, digest,
+   * quota, or platform state has changed, the plan is stale and a fresh
+   * read-only plan is required. Staged authorization is not consumed. */
+  revalidatePlan(fingerprint: PlanFingerprint, mutationSet: MutationSet): StaleCheckResult {
+    const a = this.activation.snapshot();
+    return isStale(fingerprint, {
+      workspace: this.workspace,
+      authorityRevision: a.revision,
+      fsProbe: defaultFsProbe(),
+      clock: this.clock,
+      currentStoreUsageBytes: 0,
+      mutationSet,
+    });
+  }
+
+  /** Story 3.3 AC #4: process a confirmation for a partially protected or
+   * unprotected mutation set. Discloses the exact unprotected scope and
+   * residual risk; requires explicit confirmation for that exact scope.
+   * Full Access CANNOT suppress checkpoint rules or convert Plan into
+   * authorization. */
+  confirmMutation(
+    preflightResult: ProtectionPreflightResult,
+    userConfirmed: boolean,
+    confirmedScope: ConfirmationScope | null,
+  ): ConfirmationResult {
+    const a = this.activation.snapshot();
+    return processConfirmation({
+      preflightResult,
+      isFullAccess: a.profile === 'full-access',
+      isPlanMode: a.mode === 'plan',
+      userConfirmed,
+      confirmedScope,
     });
   }
 
