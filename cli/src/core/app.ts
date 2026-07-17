@@ -166,9 +166,16 @@ import { sanitizer } from './security/sanitizer.js';
 import {
   listCheckpoints,
   inspectCheckpoint,
+  analyzeRollbackSet,
   renderRollbackListOutput,
   renderRollbackInspectOutput,
 } from './rollback/index.js';
+import type {
+  AnalyzeRollbackResult,
+  AnalysisContext,
+  AnalysisFsProbe,
+  RollbackTarget,
+} from './rollback/types.js';
 import { asCheckpointId } from './checkpoints/types.js';
 
 export interface CoreStatus {
@@ -1426,6 +1433,74 @@ export class CoreApp {
     return renderRollbackInspectOutput(result.preview);
   }
 
+  // --- Story 3.13: Rollback conflict analysis ---
+
+  /**
+   * Analyze each rollback target against its pre-image, post-image, and current
+   * state (three-way). Returns a RollbackAnalysis with per-target outcomes and
+   * overall eligibility. Does NOT apply anything (apply is 3.14).
+   *
+   * AC #1: resolves stable current identity + captures current digest/version
+   * BEFORE any effect, then compares recorded pre-image, recorded agent
+   * post-image/patch, and current content/deletion state.
+   *
+   * AC #2: current state matches post-image + identity unchanged → applied-eligible
+   * with concrete inverse operation, expected current digest/version, rename
+   * handling, and no unrelated target included.
+   *
+   * AC #3: current state differs, later edit overlaps, renamed/deleted/recreated,
+   * case/unicode changed, behind symlink/mount, or concurrency uncertain →
+   * conflict/skipped/inaccessible/mismatch/unknown-outcome; NO overwrite or
+   * best-effort reversal prepared.
+   *
+   * AC #4: binary original in encrypted ArtifactStore → reads via integrity-
+   * verified path, verifies integrity + compares digests WITHOUT exposing raw
+   * bytes in UI/logs/Evidence; missing or corrupt originals are NOT apply-eligible.
+   *
+   * AC #5: conflict panel offers ONLY safe choices: skip target, export a
+   * sanitized patch/Evidence, rebase/apply to a new path where identity policy
+   * permits, or explicit user-authored resolution. Generic overwrite, continue,
+   * and blind retry are UNAVAILABLE.
+   */
+  analyzeRollback(
+    checkpointId: string,
+    selectedTargets: readonly RollbackTarget[],
+    opts: {
+      kvStore?: KeyValueStore;
+      blobStore?: BlobStore;
+      encKey?: Buffer;
+      fsProbe?: AnalysisFsProbe;
+    } = {},
+  ): AnalyzeRollbackResult {
+    const kvStore = opts.kvStore;
+    if (!kvStore) {
+      return {
+        ok: false,
+        failure: {
+          category: 'checkpoint-not-found',
+          retryable: false,
+          scope: 'rollback-analysis',
+          message: 'no key-value store available for checkpoint analysis',
+          causeCode: 'no-kv-store',
+        },
+      };
+    }
+
+    const checkpointRepo = new CheckpointRepository(kvStore, this.clock);
+    const artifactStore = opts.blobStore && opts.encKey
+      ? new ArtifactStore(opts.blobStore, opts.encKey)
+      : undefined;
+
+    const ctx: AnalysisContext = {
+      fsProbe: opts.fsProbe ?? defaultAnalysisFsProbe(),
+      checkpointRepo,
+      artifactStore,
+      clock: this.clock,
+    };
+
+    return analyzeRollbackSet(checkpointId, selectedTargets, ctx);
+  }
+
   // --- Story 3.9: Agent Loop hardening ---
 
   /**
@@ -1590,6 +1665,54 @@ function defaultFsMutator(): FsMutator {
       // eslint-disable-next-line @typescript-eslint/no-require-imports
       const fs = require('node:fs') as typeof import('node:fs');
       fs.mkdirSync(dir, { recursive: true });
+    },
+  };
+}
+
+/** Default AnalysisFsProbe using real node:fs (for production use). */
+function defaultAnalysisFsProbe(): AnalysisFsProbe {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const fs = require('node:fs') as typeof import('node:fs');
+  return {
+    readFile(path: string): Uint8Array {
+      return fs.readFileSync(path);
+    },
+    lstat(path: string) {
+      const s = fs.lstatSync(path);
+      return {
+        dev: s.dev,
+        ino: s.ino,
+        size: s.size,
+        isDirectory: s.isDirectory(),
+        isFile: s.isFile(),
+        isSymbolicLink: s.isSymbolicLink(),
+      };
+    },
+    realpath(path: string): string {
+      return fs.realpathSync(path);
+    },
+    stat(path: string) {
+      const s = fs.statSync(path);
+      return {
+        dev: s.dev,
+        ino: s.ino,
+        size: s.size,
+        isDirectory: s.isDirectory(),
+        isFile: s.isFile(),
+      };
+    },
+    isAccessible(path: string): boolean {
+      try {
+        fs.accessSync(path, fs.constants.R_OK);
+        return true;
+      } catch {
+        return false;
+      }
+    },
+    hasOpenHandles(_path: string): boolean {
+      // Best-effort: on Unix, check /proc/self/fd. For now, return false
+      // (optimistic — concurrency detection is platform-specific).
+      return false;
     },
   };
 }

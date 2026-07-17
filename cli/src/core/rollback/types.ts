@@ -153,3 +153,167 @@ export type ListCheckpointsResult =
 export type InspectCheckpointResult =
   | { readonly ok: true; readonly preview: RollbackPreview }
   | { readonly ok: false; readonly failure: RollbackFailure };
+
+// --- Three-way analysis types (Story 3.13, AD-6, AD-19, AD-20, AD-24, AD-28) ---
+
+/**
+ * The state of a file at a point in time: present with digest/version, absent,
+ * or unknown (inaccessible).
+ */
+export type ThreeWayState =
+  | { readonly kind: 'present'; readonly digest: string; readonly version: string | null }
+  | { readonly kind: 'absent' }
+  | { readonly kind: 'unknown' };
+
+/**
+ * The outcome of analyzing a single rollback target.
+ * - `applied-eligible`: current state matches post-image, identity unchanged.
+ * - `conflict`: current state differs, later edit overlaps, or behind symlink/mount.
+ * - `skipped`: target was explicitly excluded or not covered.
+ * - `inaccessible`: cannot read current state (permissions, missing).
+ * - `mismatch`: identity changed (renamed, recreated, case/unicode).
+ * - `unknown-outcome`: concurrency/open-handle state uncertain.
+ */
+export type AnalysisOutcome =
+  | {
+      readonly kind: 'applied-eligible';
+      readonly inverseOperation: InverseOperation;
+      readonly expectedCurrentDigest: string;
+      readonly expectedCurrentVersion: string | null;
+      readonly renameHandling: RenameHandling | null;
+    }
+  | {
+      readonly kind: 'conflict';
+      readonly reason: string;
+      readonly reasonCode: string;
+      readonly safeChoices: readonly SafeChoice[];
+    }
+  | { readonly kind: 'skipped'; readonly reason: string }
+  | { readonly kind: 'inaccessible'; readonly reason: string; readonly causeCode: string }
+  | { readonly kind: 'mismatch'; readonly reason: string; readonly reasonCode: string }
+  | { readonly kind: 'unknown-outcome'; readonly reason: string };
+
+/**
+ * The concrete inverse operation to apply for an applied-eligible target.
+ * - `restore-pre-image`: write the pre-image content back (text file).
+ * - `delete-file`: remove the file (inverse of create).
+ * - `restore-from-artifact`: restore from encrypted artifact store (binary).
+ */
+export type InverseOperation =
+  | { readonly kind: 'restore-pre-image'; readonly preImageDigest: string }
+  | { readonly kind: 'delete-file' }
+  | { readonly kind: 'restore-from-artifact'; readonly artifactId: string };
+
+export interface RenameHandling {
+  readonly originalPath: string;
+  readonly currentPath: string;
+  readonly isRename: boolean;
+}
+
+/**
+ * Safe choices available when a conflict is detected (AC #5).
+ * Generic overwrite, continue, and blind retry are UNAVAILABLE.
+ */
+export type SafeChoice =
+  | { readonly kind: 'skip-target' }
+  | { readonly kind: 'export-sanitized-patch' }
+  | { readonly kind: 'rebase-new-path'; readonly newPath: string }
+  | { readonly kind: 'user-authored-resolution' };
+
+/**
+ * Per-target analysis result from three-way comparison.
+ */
+export interface TargetAnalysis {
+  readonly target: {
+    readonly canonicalPath: string;
+    readonly displayPath: string;
+  };
+  readonly preImage: ThreeWayState;
+  readonly postImage: ThreeWayState;
+  readonly currentState: ThreeWayState;
+  readonly outcome: AnalysisOutcome;
+  readonly identityChanged: boolean;
+  readonly isBinary: boolean;
+}
+
+/**
+ * Aggregate analysis for a set of rollback targets.
+ */
+export interface RollbackAnalysis {
+  readonly checkpointId: CheckpointId;
+  readonly perTarget: readonly TargetAnalysis[];
+  readonly overallEligible: boolean;
+  readonly eligibleCount: number;
+  readonly conflictCount: number;
+  readonly skippedCount: number;
+  readonly inaccessibleCount: number;
+  readonly mismatchCount: number;
+  readonly unknownCount: number;
+}
+
+/**
+ * Input describing a single rollback target for analysis.
+ */
+export interface RollbackTarget {
+  readonly canonicalPath: string;
+  readonly displayPath: string;
+  readonly preImageDigest: string | null;
+  readonly postImageDigest: string | null;
+  readonly isBinary: boolean;
+  readonly artifactId: string | null;
+  readonly effectKind: 'create_file' | 'edit_file' | 'delete_file';
+}
+
+/**
+ * Injectable filesystem probe for rollback analysis.
+ * Extends the workspace FsProbe with accessibility and open-handle checks.
+ */
+export interface AnalysisFsProbe {
+  readFile(path: string): Uint8Array;
+  lstat(path: string): {
+    dev: number;
+    ino: number;
+    size: number;
+    isDirectory: boolean;
+    isFile: boolean;
+    isSymbolicLink: boolean;
+  };
+  realpath(path: string): string;
+  stat(path: string): {
+    dev: number;
+    ino: number;
+    size: number;
+    isDirectory: boolean;
+    isFile: boolean;
+  };
+  isAccessible(path: string): boolean;
+  hasOpenHandles(path: string): boolean;
+}
+
+/**
+ * Context for rollback analysis (injectable dependencies).
+ */
+export interface AnalysisContext {
+  readonly fsProbe: AnalysisFsProbe;
+  readonly checkpointRepo: import('../checkpoints/checkpointRepository.js').CheckpointRepository;
+  readonly artifactStore?: import('../checkpoints/artifactStore.js').ArtifactStore;
+  readonly clock: () => string;
+}
+
+// --- AD-9 typed failure envelope for analysis ---
+
+export type AnalysisFailureCategory = 'checkpoint-not-found' | 'checkpoint-unreadable' | 'internal-error';
+
+export interface AnalysisFailure {
+  readonly category: AnalysisFailureCategory;
+  readonly retryable: boolean;
+  readonly scope: 'rollback-analysis';
+  readonly message: string;
+  readonly causeCode: string;
+}
+
+// --- Analysis result ---
+
+export type AnalyzeRollbackResult =
+  | { readonly ok: true; readonly analysis: RollbackAnalysis }
+  | { readonly ok: false; readonly failure: AnalysisFailure };
