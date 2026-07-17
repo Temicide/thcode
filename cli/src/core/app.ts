@@ -201,6 +201,10 @@ import {
   type RoutingDecision,
 } from './specialists/routing/index.js';
 import {
+  SpecialistArtifactResolver,
+  type ArtifactResolutionResult,
+} from './specialists/artifacts/index.js';
+import {
   listCheckpoints,
   inspectCheckpoint,
   analyzeRollbackSet,
@@ -307,6 +311,8 @@ export class CoreApp {
   private _aiforthaiPersistence: CredentialPersistence = new InMemoryCredentialPersistence();
   /** Story 4.4: specialist health lifecycle (dedicated HealthRegistry instance). */
   private _specialistHealth: SpecialistHealthLifecycle;
+  /** Story 4.6: specialist artifact resolver (in-workspace reference resolution). */
+  private _specialistArtifactResolver: SpecialistArtifactResolver;
 
   constructor(opts: CoreAppOptions = {}) {
     // Fail-closed startup: incompatible protocol major version throws before
@@ -320,6 +326,10 @@ export class CoreApp {
     this.repo = opts.repo;
     this.clock = opts.clock ?? (() => new Date().toISOString());
     this._specialistHealth = new SpecialistHealthLifecycle(this.clock);
+    this._specialistArtifactResolver = new SpecialistArtifactResolver({
+      fsProbe: defaultFsProbe(),
+      clock: this.clock,
+    });
     this.loop = new AgentLoop({
       providers: this.providers,
       tools: this.tools,
@@ -1728,6 +1738,18 @@ export class CoreApp {
       },
       this.clock,
     );
+  }
+
+  /** Story 4.6: resolve an explicit artifact reference for a Specialist Service.
+   * When `serviceId` is provided, loads the target entry from the Capability
+   * Registry for size/compatibility enforcement. When omitted, compatibility
+   * is reported as `unverified` and size checks are skipped. No remote transfer
+   * occurs here (Stories 4.8/4.9 own consent and transfer). */
+  async resolveSpecialistArtifact(reference: string, serviceId?: string): Promise<ArtifactResolutionResult> {
+    const targetEntry = serviceId
+      ? this.capabilityRegistry().byId(serviceId) ?? undefined
+      : undefined;
+    return this._specialistArtifactResolver.resolveArtifact(reference, this.workspaceRoot, targetEntry);
   }
 
   /** `/tools` view of the Catalog Manifest (ADR 0011). */
