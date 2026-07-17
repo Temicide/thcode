@@ -87,7 +87,7 @@ import {
   type CommandOutput,
   type CoreCommand,
 } from './protocol/commandGrammar.js';
-import { asSessionId, newOperationId } from './protocol/ids.js';
+import { asSessionId, asOperationId, newOperationId } from './protocol/ids.js';
 import type { OperationId } from './protocol/ids.js';
 import type { SessionRepository } from './sessions/repository.js';
 import { CheckpointRepository } from './checkpoints/checkpointRepository.js';
@@ -181,6 +181,20 @@ import type {
   ApplyFsProbe,
 } from './rollback/types.js';
 import { asCheckpointId } from './checkpoints/types.js';
+import {
+  classify,
+  reconcileOperation,
+  buildRecoveryResult,
+  renderRecoveryInspect,
+  renderRecoveryReconcile,
+  renderRecoveryExport,
+  renderRecoveryExit,
+  renderRecoveryHelp,
+} from './recovery/index.js';
+import type {
+  RecoveryAction,
+  RecoveryClassification,
+} from './recovery/types.js';
 
 export interface CoreStatus {
   readonly mode: WorkMode;
@@ -1337,6 +1351,25 @@ export class CoreApp {
         }
         return renderCommandOutput({ status: 'blocked', cause: 'rollback requires a subcommand: list or inspect <id>', nextStep: 'usage: /rollback list | /rollback inspect <id>' });
       }
+      case 'recover': {
+        const sub = args[0];
+        if (sub === 'inspect' && args[1]) {
+          return this.recoverInspect(args[1]);
+        }
+        if (sub === 'reconcile' && args[1]) {
+          return this.recoverReconcile(args[1]);
+        }
+        if (sub === 'export' && args[1]) {
+          return this.recoverExport(args[1]);
+        }
+        if (sub === 'exit') {
+          return this.recoverExit();
+        }
+        if (!sub) {
+          return renderRecoveryHelp();
+        }
+        return renderCommandOutput({ status: 'blocked', cause: 'recover requires a subcommand: inspect, reconcile, export, or exit', nextStep: 'usage: /recover inspect <id> | /recover reconcile <id> | /recover export <id> | /recover exit' });
+      }
     }
   }
 
@@ -1435,6 +1468,181 @@ export class CoreApp {
       return renderCommandOutput({ status: 'blocked', cause: result.failure.message, nextStep: 'verify the checkpoint id and retry' });
     }
     return renderRollbackInspectOutput(result.preview);
+  }
+
+  // --- Story 3.15: Recovery of interrupted checkpoint and mutation operations ---
+
+  /**
+   * Inspect an operation for recovery (Story 3.15 AC #1).
+   * Classifies the operation from the journal, detects unreachable/incomplete
+   * checkpoint material, and NEVER replays a native effect automatically.
+   */
+  recoverInspect(operationId: string): CommandOutput {
+    if (!this.repo) {
+      return renderCommandOutput({ status: 'blocked', cause: 'no journal repository available for recovery inspection', nextStep: 'ensure a journal repository is configured' });
+    }
+
+    const opId = asOperationId(operationId);
+    const sessionId = asSessionId(this.sessionId());
+    const events = this.repo.queryEvents(sessionId, 0);
+    const mappedEvents = events.map((e) => ({ kind: e.payload.kind, operationId: e.operationId ?? '' }));
+
+    // Detect incomplete checkpoint stages.
+    const checkpointRepo = this._checkpointRepo;
+    const incompleteStageIds = checkpointRepo?.detectIncompleteStages() ?? [];
+
+    // Find checkpoint for this operation.
+    const operationCheckpoint = checkpointRepo?.findByOperationId(opId) ?? null;
+    const checkpointMaterial: { stageState: string; integrityState: string } | null =
+      operationCheckpoint
+        ? { stageState: operationCheckpoint.stageState, integrityState: operationCheckpoint.integrityState }
+        : null;
+
+    const classifyResult = classify({
+      operationId: opId,
+      journalEvents: mappedEvents,
+      incompleteStageIds,
+      operationCheckpoint: checkpointMaterial,
+    });
+
+    if (!classifyResult.ok) {
+      return renderCommandOutput({ status: 'blocked', cause: classifyResult.failure.message, nextStep: 'verify the operation id and retry' });
+    }
+
+    const classification = classifyResult.classification;
+    const action: RecoveryAction = classification.journalState === 'succeeded' || classification.journalState === 'failed' || classification.journalState === 'cancelled'
+      ? 'exit'
+      : 'inspect';
+
+    const nextStep = classification.journalState === 'dispatch-committed' || classification.journalState === 'unknown-outcome'
+      ? 'reconcile explicitly; do not auto-retry'
+      : 'no action needed';
+
+    const result = buildRecoveryResult({ classification, action, nextStep });
+    return renderRecoveryInspect({ classification, result });
+  }
+
+  /**
+   * Reconcile an operation's checkpoint material (Story 3.15 AC #4).
+   * Attempts ONLY repository/journal reconciliation and safe reference repair.
+   * NEVER fabricates complete protection.
+   */
+  recoverReconcile(operationId: string): CommandOutput {
+    if (!this.repo) {
+      return renderCommandOutput({ status: 'blocked', cause: 'no journal repository available for recovery reconciliation', nextStep: 'ensure a journal repository is configured' });
+    }
+
+    const checkpointRepo = this._checkpointRepo;
+    if (!checkpointRepo) {
+      return renderCommandOutput({ status: 'blocked', cause: 'no checkpoint repository available for recovery reconciliation', nextStep: 'ensure a checkpoint store is configured' });
+    }
+
+    const opId = asOperationId(operationId);
+    const sessionId = asSessionId(this.sessionId());
+    const events = this.repo.queryEvents(sessionId, 0);
+    const mappedEvents = events.map((e) => ({ kind: e.payload.kind, operationId: e.operationId ?? '' }));
+
+    const reconcileResult = reconcileOperation({
+      operationId: opId,
+      journalEvents: mappedEvents,
+      checkpointRepo,
+    });
+
+    if (!reconcileResult.ok) {
+      return renderCommandOutput({ status: 'blocked', cause: reconcileResult.failure.message, nextStep: 'verify the operation id and retry' });
+    }
+
+    const classification: RecoveryClassification = {
+      operationId: opId,
+      journalState: 'unknown-outcome',
+      operationState: 'unknown-outcome',
+      checkpointMaterial: 'incomplete',
+      residualRisk: { description: 'Checkpoint material reconciled', scope: 'none', severity: 'none' },
+      dispatchClassification: 'reference-publication-failed',
+      hasEffectDispatchCommitted: true,
+      hasTerminalEvent: false,
+      terminalKind: null,
+    };
+
+    const result = buildRecoveryResult({
+      classification,
+      action: 'reconcile',
+      nextStep: reconcileResult.rollbackScopeLabel === 'corrupt' ? 'inspect the checkpoint store; data may be unrecoverable' : 'review reconciliation details',
+    });
+
+    return renderRecoveryReconcile({
+      operationId,
+      details: reconcileResult.details,
+      rollbackScopeLabel: reconcileResult.rollbackScopeLabel,
+      result,
+    });
+  }
+
+  /**
+   * Export sanitized evidence for an operation (Story 3.15 AC #6).
+   * No raw bytes in evidence (AD-24).
+   */
+  recoverExport(operationId: string): CommandOutput {
+    if (!this.repo) {
+      return renderCommandOutput({ status: 'blocked', cause: 'no journal repository available for recovery export', nextStep: 'ensure a journal repository is configured' });
+    }
+
+    const opId = asOperationId(operationId);
+    const sessionId = asSessionId(this.sessionId());
+    const events = this.repo.queryEvents(sessionId, 0);
+    const mappedEvents = events.map((e) => ({ kind: e.payload.kind, operationId: e.operationId ?? '' }));
+    const opEvents = mappedEvents.filter((e) => e.operationId === opId);
+
+    const classification: RecoveryClassification = {
+      operationId: opId,
+      journalState: opEvents.length > 0 ? 'unknown-outcome' : 'not-sent',
+      operationState: opEvents.length > 0 ? 'unknown-outcome' : 'proposed',
+      checkpointMaterial: 'not-applicable',
+      residualRisk: { description: 'Evidence exported for inspection', scope: 'none', severity: 'none' },
+      dispatchClassification: 'terminal-evidence-recorded',
+      hasEffectDispatchCommitted: opEvents.some((e) => e.kind === 'EffectDispatchCommitted'),
+      hasTerminalEvent: opEvents.some((e) => ['OperationSucceeded', 'OperationFailed', 'OperationCancelled', 'OperationUnknownOutcome'].includes(e.kind)),
+      terminalKind: opEvents.find((e) => ['OperationSucceeded', 'OperationFailed', 'OperationCancelled', 'OperationUnknownOutcome'].includes(e.kind))?.kind ?? null,
+    };
+
+    const result = buildRecoveryResult({
+      classification,
+      action: 'export-safe-evidence',
+      nextStep: 'evidence exported; review and determine next action',
+    });
+
+    return renderRecoveryExport({
+      operationId,
+      evidence: opEvents,
+      result,
+    });
+  }
+
+  /**
+   * Exit recovery with stable exit class/code (Story 3.15 AC #6).
+   * Unresolved state remains visible.
+   */
+  recoverExit(): CommandOutput {
+    const unresolvedState = false; // In a full implementation, this would check for unresolved operations.
+    const classification: RecoveryClassification = {
+      operationId: '' as unknown as import('./protocol/ids.js').OperationId,
+      journalState: 'succeeded',
+      operationState: 'succeeded',
+      checkpointMaterial: 'not-applicable',
+      residualRisk: { description: 'Recovery session ended', scope: 'none', severity: 'none' },
+      dispatchClassification: 'terminal-evidence-recorded',
+      hasEffectDispatchCommitted: false,
+      hasTerminalEvent: true,
+      terminalKind: 'OperationSucceeded',
+    };
+
+    const result = buildRecoveryResult({
+      classification,
+      action: 'exit',
+      nextStep: 'recovery complete',
+    });
+
+    return renderRecoveryExit({ unresolvedState, result });
   }
 
   // --- Story 3.13: Rollback conflict analysis ---

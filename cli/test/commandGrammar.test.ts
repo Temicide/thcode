@@ -173,3 +173,84 @@ describe('Command dispatch — /rollback (Story 3.12)', () => {
     expect(out.stdout).toContain('/rollback');
   });
 });
+
+describe('Command dispatch — /recover (Story 3.15)', () => {
+  it('/recover is a declared command', () => {
+    const cmds = COMMAND_GRAMMAR.map((c) => c.command);
+    expect(cmds).toContain('recover');
+  });
+
+  it('/recover has alias /rc', () => {
+    const spec = COMMAND_GRAMMAR.find((c) => c.command === 'recover');
+    expect(spec).toBeTruthy();
+    expect(spec!.aliases).toContain('rc');
+  });
+
+  it('/recover inspect <id> parses successfully', () => {
+    const r = parseCommand('/recover inspect op-123');
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      expect(r.command).toBe('recover');
+      expect(r.args).toEqual(['inspect', 'op-123']);
+    }
+  });
+
+  it('/recover reconcile <id> parses successfully', () => {
+    const r = parseCommand('/recover reconcile op-123');
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      expect(r.command).toBe('recover');
+      expect(r.args).toEqual(['reconcile', 'op-123']);
+    }
+  });
+
+  it('/recover export <id> parses successfully', () => {
+    const r = parseCommand('/recover export op-123');
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      expect(r.command).toBe('recover');
+      expect(r.args).toEqual(['export', 'op-123']);
+    }
+  });
+
+  it('/recover exit parses successfully', () => {
+    const r = parseCommand('/recover exit');
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      expect(r.command).toBe('recover');
+      expect(r.args).toEqual(['exit']);
+    }
+  });
+
+  it('/rc inspect parses via alias', () => {
+    const r = parseCommand('/rc inspect op-123');
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      expect(r.command).toBe('recover');
+      expect(r.args).toEqual(['inspect', 'op-123']);
+    }
+  });
+
+  it('/recover without subcommand shows help', () => {
+    const out = app().dispatchCommand('/recover');
+    expect(out.exitCode).toBe(0);
+    expect(out.stdout).toContain('RECOVERY ENTRY POINT');
+  });
+
+  it('/recover with unknown subcommand returns blocked', () => {
+    const out = app().dispatchCommand('/recover unknown');
+    expect(out.exitCode).toBe(20);
+    expect(out.stderr).toContain('recover requires a subcommand');
+  });
+
+  it('/recover inspect without journal returns blocked', () => {
+    const out = app().dispatchCommand('/recover inspect op-123');
+    expect(out.exitCode).toBe(20);
+    expect(out.stderr).toContain('no journal repository');
+  });
+
+  it('/recover is listed in /help output', () => {
+    const out = app().dispatchCommand('/help');
+    expect(out.stdout).toContain('/recover');
+  });
+});
