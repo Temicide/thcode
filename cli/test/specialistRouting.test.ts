@@ -168,7 +168,11 @@ function buildOptions(overrides: Partial<RoutingOptions> & { healthMap?: HealthM
 function fullHealthMap(state: string = 'available'): HealthMap {
   const map: HealthMap = {};
   for (const e of ALL_ENTRIES) {
-    map[e.id] = state as HealthMap[string];
+    // Only set health for invokable entries — non-invokable entries should not
+    // have a health state (the router checks invokable before consulting health).
+    if (e.invokable) {
+      map[e.id] = state as HealthMap[string];
+    }
   }
   return map;
 }
@@ -802,7 +806,7 @@ describe('routeSpecialistPrompt', () => {
     }
   });
 
-  it('refused with unsupported reason when no match and no non-invokable hit', () => {
+  it('refused with Catalogued reason when signal matches non-invokable entry', () => {
     // "translate" matches the non-invokable typhoon-translate, so it should be refused with Catalogued reason
     const decision = routeSpecialistPrompt(
       'translate this to Thai',

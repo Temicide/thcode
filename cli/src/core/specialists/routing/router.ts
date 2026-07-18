@@ -44,7 +44,12 @@ function buildRationale(
   entry: CapabilityRegistryEntry,
   matchedTerms: readonly string[],
 ): string {
-  const lang = detectLanguage(prompt);
+  let lang: ReturnType<typeof detectLanguage>;
+  try {
+    lang = detectLanguage(prompt);
+  } catch {
+    lang = 'unknown';
+  }
 
   // Pick the best matched term for the rationale.
   const bestTerm = matchedTerms.length > 0
@@ -69,7 +74,12 @@ function buildClarificationQuestion(
   candidates: readonly string[],
   entries: readonly CapabilityRegistryEntry[],
 ): string {
-  const lang = detectLanguage(prompt);
+  let lang: ReturnType<typeof detectLanguage>;
+  try {
+    lang = detectLanguage(prompt);
+  } catch {
+    lang = 'unknown';
+  }
   const names = candidates.map((id) => {
     const e = entries.find((en) => en.id === id);
     return e ? `${e.nameEnglish} (${e.nameThai})` : id;
@@ -95,22 +105,22 @@ function hasSpecialistSignal(
   const promptLower = prompt.toLowerCase();
   const allEntries = [...invokableEntries, ...nonInvokableEntries];
   for (const entry of allEntries) {
-    // Check id mention
-    if (promptLower.includes(entry.id.toLowerCase())) return true;
+    // Guard against empty id — empty string includes() always returns true.
+    if (entry.id.length > 0 && promptLower.includes(entry.id.toLowerCase())) return true;
     // Check searchTerms
     for (const term of entry.searchTerms) {
-      if (promptLower.includes(term.toLowerCase())) return true;
+      if (term.length > 0 && promptLower.includes(term.toLowerCase())) return true;
     }
     // Check capabilities
     for (const cap of entry.capabilities) {
-      if (promptLower.includes(cap.toLowerCase())) return true;
+      if (cap.length > 0 && promptLower.includes(cap.toLowerCase())) return true;
     }
     // Check names
-    if (promptLower.includes(entry.nameThai.toLowerCase())) return true;
-    if (promptLower.includes(entry.nameEnglish.toLowerCase())) return true;
+    if (entry.nameThai.length > 0 && promptLower.includes(entry.nameThai.toLowerCase())) return true;
+    if (entry.nameEnglish.length > 0 && promptLower.includes(entry.nameEnglish.toLowerCase())) return true;
     // Check supportedInputs
     for (const input of entry.supportedInputs) {
-      if (promptLower.includes(input.toLowerCase())) return true;
+      if (input.length > 0 && promptLower.includes(input.toLowerCase())) return true;
     }
   }
   return false;
@@ -123,12 +133,12 @@ function hasNonInvokableSignal(
 ): boolean {
   const promptLower = prompt.toLowerCase();
   for (const entry of nonInvokableEntries) {
-    if (promptLower.includes(entry.id.toLowerCase())) return true;
+    if (entry.id.length > 0 && promptLower.includes(entry.id.toLowerCase())) return true;
     for (const term of entry.searchTerms) {
-      if (promptLower.includes(term.toLowerCase())) return true;
+      if (term.length > 0 && promptLower.includes(term.toLowerCase())) return true;
     }
     for (const cap of entry.capabilities) {
-      if (promptLower.includes(cap.toLowerCase())) return true;
+      if (cap.length > 0 && promptLower.includes(cap.toLowerCase())) return true;
     }
   }
   return false;
@@ -214,43 +224,65 @@ export function routeSpecialistPrompt(
 
   // (d) Direct id mention: check if prompt explicitly names an invokable service id
   const promptLower = prompt.toLowerCase();
+  const directIdMatches: CapabilityRegistryEntry[] = [];
   for (const entry of invokableEntries) {
     const idLower = entry.id.toLowerCase();
+    // Guard against empty id — empty string includes() always returns true.
+    if (idLower.length === 0) continue;
     // Check for direct id mention with word boundary
     const directIdRe = new RegExp(`\\b${escapeRegex(idLower)}\\b`);
     if (directIdRe.test(promptLower)) {
-      // Direct id match takes precedence
-      const healthState = options.healthMap[entry.id] ?? 'unconfigured';
-      const disabled = options.disabledSet.has(entry.id);
+      directIdMatches.push(entry);
+    }
+  }
 
-      if (healthState === 'available' && !disabled) {
-        const schema = buildTaskRelevantSchema(entry);
-        const rationale = buildRationale(prompt, entry, [`id:${entry.id}`]);
-        const provenance = buildProvenance(prompt, { [entry.id]: [`id:${entry.id}`] }, clock);
-        const propose: ProposeDecision = {
-          kind: 'propose',
-          serviceId: entry.id,
-          serviceName: entry.nameEnglish,
-          rationale,
-          schema,
-          provenance,
-        };
-        return propose;
-      }
+  // If multiple ids are mentioned, clarify rather than silently picking the first.
+  if (directIdMatches.length > 1) {
+    const candidates = directIdMatches.map((e) => e.id);
+    const question = buildClarificationQuestion(prompt, candidates, invokableEntries);
+    const provenance = buildProvenance(prompt, {}, clock);
+    const clarify: ClarifyDecision = {
+      kind: 'clarify',
+      question,
+      candidates,
+      provenance,
+    };
+    return clarify;
+  }
 
-      // Service not available or disabled -> blocked
-      const stateToken = disabled ? 'disabled' : healthState;
-      const nextAction = disabled ? 'enable' : (healthState === 'unavailable' || healthState === 'quarantined' ? 'retest' : 'recover');
+  // Single direct id mention takes precedence.
+  if (directIdMatches.length === 1) {
+    const entry = directIdMatches[0];
+    const healthState = options.healthMap[entry.id] ?? 'unconfigured';
+    const disabled = options.disabledSet.has(entry.id);
+
+    if (healthState === 'available' && !disabled) {
+      const schema = buildTaskRelevantSchema(entry);
+      const rationale = buildRationale(prompt, entry, [`id:${entry.id}`]);
       const provenance = buildProvenance(prompt, { [entry.id]: [`id:${entry.id}`] }, clock);
-      const blocked: BlockedDecision = {
-        kind: 'blocked',
-        cause: 'service-unavailable',
-        stateToken,
-        nextAction,
+      const propose: ProposeDecision = {
+        kind: 'propose',
+        serviceId: entry.id,
+        serviceName: entry.nameEnglish,
+        rationale,
+        schema,
         provenance,
       };
-      return blocked;
+      return propose;
     }
+
+    // Service not available or disabled -> blocked
+    const stateToken = disabled ? 'disabled' : healthState;
+    const nextAction = disabled ? 'enable' : (healthState === 'unavailable' || healthState === 'quarantined' ? 'retest' : 'recover');
+    const provenance = buildProvenance(prompt, { [entry.id]: [`id:${entry.id}`] }, clock);
+    const blocked: BlockedDecision = {
+      kind: 'blocked',
+      cause: 'service-unavailable',
+      stateToken,
+      nextAction,
+      provenance,
+    };
+    return blocked;
   }
 
   // (e) No Specialist signal at all -> none
@@ -263,7 +295,7 @@ export function routeSpecialistPrompt(
     return none;
   }
 
-  // (f) No invokable matches at all -> refused
+  // (i) Specialist signal present but zero invokable matches -> refused
   if (matches.length === 0) {
     const provenance = buildProvenance(prompt, matchedTerms, clock);
     if (nonInvokableHit) {
@@ -316,7 +348,7 @@ export function routeSpecialistPrompt(
     }
   }
 
-  // (f) Single clear top match
+  // (f) Single clear top match -> propose if available, else blocked
   const topMatch = matches[0];
   const topEntry = invokableEntries.find((e) => e.id === topMatch.serviceId)!;
   const healthState = options.healthMap[topEntry.id] ?? 'unconfigured';

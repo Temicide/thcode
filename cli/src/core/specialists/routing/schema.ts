@@ -25,11 +25,26 @@ import type { TaskRelevantSchema } from './types.js';
  * @param entry - The registry entry for the proposed service.
  * @returns A minimal TaskRelevantSchema for that service only.
  */
+/** Keys that are never allowed in inputLimits — defense in depth against
+ *  malformed manifests leaking secrets into Active Model Context. */
+const FORBIDDEN_INPUT_LIMIT_KEYS = new Set([
+  'apiKey', 'apikey', 'api_key', 'secret', 'secretKey', 'secret_key',
+  'token', 'credential', 'password', 'passwd', 'endpoint', 'url',
+]);
+
 export function buildTaskRelevantSchema(entry: CapabilityRegistryEntry): TaskRelevantSchema {
+  // Sanitize inputLimits: strip any keys that look like secrets.
+  const sanitizedLimits: Record<string, string> = {};
+  for (const [key, value] of Object.entries(entry.inputLimits)) {
+    if (!FORBIDDEN_INPUT_LIMIT_KEYS.has(key)) {
+      sanitizedLimits[key] = value;
+    }
+  }
+
   return {
     serviceId: entry.id,
     supportedInputs: entry.supportedInputs,
-    inputLimits: { ...entry.inputLimits },
+    inputLimits: sanitizedLimits,
     transportPolicy: {
       allowedProtocols: [...entry.transportRules.allowedProtocols],
       requiresTls: entry.transportRules.requiresTls,

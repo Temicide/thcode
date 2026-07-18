@@ -47,6 +47,8 @@ export interface ServiceMatch {
  *  Uses \b for Latin-script ids; for ids with non-Latin characters, falls
  *  back to substring matching. */
 function hasDirectIdMention(promptLower: string, id: string): boolean {
+  // Guard against empty id — empty string includes() always returns true.
+  if (id.length === 0) return false;
   const idLower = id.toLowerCase();
   // Try word-boundary regex first (works for Latin-script ids like "t-ocr").
   try {
@@ -76,6 +78,8 @@ function escapeRegex(s: string): string {
 function findTermMatches(promptLower: string, terms: readonly string[]): readonly string[] {
   const matched: string[] = [];
   for (const term of terms) {
+    // Guard against empty term — empty string includes() always returns true.
+    if (term.length === 0) continue;
     const termLower = term.toLowerCase();
     if (promptLower.includes(termLower)) {
       matched.push(term);
@@ -142,11 +146,11 @@ export function matchPromptToServices(
     // 4. Name (Thai/English) substring match
     const thaiLower = entry.nameThai.toLowerCase();
     const engLower = entry.nameEnglish.toLowerCase();
-    if (promptLower.includes(thaiLower)) {
+    if (thaiLower.length > 0 && promptLower.includes(thaiLower)) {
       score += NAME_SUBSTRING_SCORE;
       allMatchedTerms.push(`name:${entry.nameThai}`);
     }
-    if (promptLower.includes(engLower)) {
+    if (engLower.length > 0 && promptLower.includes(engLower)) {
       score += NAME_SUBSTRING_SCORE;
       allMatchedTerms.push(`name:${entry.nameEnglish}`);
     }

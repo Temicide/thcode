@@ -2163,10 +2163,10 @@ export class CoreApp {
   }
 
   /** Story 4.5: route a natural-language prompt to a RoutingDecision. */
-  routeSpecialistPrompt(prompt: string): RoutingDecision {
+  routeSpecialistPrompt(prompt: string, intentAmbiguity?: 'none' | 'material'): RoutingDecision {
     const registry = this.capabilityRegistry();
     const healthMap = this.buildHealthMap();
-    const isTTY = typeof process !== 'undefined' && process.stdout && process.stdout.isTTY !== false;
+    const isTTY = this.detectRenderMode() === 'interactive';
     return routeSpecialistPrompt(
       prompt,
       registry,
@@ -2174,6 +2174,7 @@ export class CoreApp {
         isTTY,
         healthMap,
         disabledSet: this._disabledServices,
+        intentAmbiguity,
       },
       this.clock,
     );
