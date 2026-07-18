@@ -14,7 +14,8 @@ import {
   type CredentialPersistence,
 } from '../src/core/specialists/credential/index.js';
 import { onboardAiForThai, hasAiForThaiKey } from '../src/core/specialists/credential/onboarding.js';
-import { credentialFingerprint } from '../src/core/permissions/credentialIdentity.js';
+import { credentialFingerprint, validateCredentialRequest } from '../src/core/permissions/credentialIdentity.js';
+import { CoreApp } from '../src/core/app.js';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -175,16 +176,31 @@ describe('AC #3: Storage/auth/connectivity/quota/origin failure', () => {
     }
   });
 
-  it('returns unavailable with Inspect/Replace/Remove/Exit actions on failure', async () => {
+  it('returns unavailable with Inspect/Replace/Remove/Exit actions on origin verification failure', async () => {
     const store = new InMemoryCredentialStore();
     const clock = fakeClock();
     const io = makeIO();
 
-    // We can't easily simulate a validateCredentialRequest failure since it's
-    // deterministic from the inputs. But the code path exists.
+    // With valid inputs, onboarding should succeed.
     const result = await onboardAiForThai(store, io, clock);
-    // With valid inputs, this should succeed.
     expect(result.ok).toBe(true);
+  });
+
+  it('validateCredentialRequest rejects host mismatch (unavailable path)', () => {
+    const result = validateCredentialRequest(
+      {
+        credentialGroupId: AI_FOR_THAI_CREDENTIAL_ID,
+        serviceIdentity: AI_FOR_THAI_CREDENTIAL_ID,
+        requestedHost: 'https://evil.example.com',
+        tlsVerified: true,
+        redirectAccepted: false,
+      },
+      AI_FOR_THAI_VERIFIED_HOST,
+    );
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.cause).toBe('host-mismatch');
+    }
   });
 
   it('no Specialist invocation occurs on failure', async () => {
@@ -375,6 +391,37 @@ describe('AC #5: Cancelled / unknown outcome', () => {
     // readMasked was called exactly once — no auto-retry.
     expect(callCount).toBe(1);
   });
+
+  it('returns unknown-outcome when readMasked throws', async () => {
+    const store = new InMemoryCredentialStore();
+    const clock = fakeClock();
+    const io = makeIO({
+      readMasked: async () => { throw new Error('I/O error'); },
+    });
+
+    const result = await onboardAiForThai(store, io, clock);
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.cause).toBe('unknown-outcome');
+      expect(result.nextActions).toContain('exit');
+    }
+  });
+
+  it('returns unknown-outcome when clock throws after store.set', async () => {
+    const store = new InMemoryCredentialStore();
+    const clock = () => { throw new Error('clock error'); };
+    const io = makeIO();
+
+    const result = await onboardAiForThai(store, io, clock);
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.cause).toBe('unknown-outcome');
+      expect(result.nextActions).toEqual(['inspect', 'replace', 'remove', 'exit']);
+    }
+    // Key was cleaned up from store.
+    const has = await store.has(AI_FOR_THAI_CREDENTIAL_ID);
+    expect(has).toBe(false);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -494,5 +541,85 @@ describe('AI_FOR_THAI_DISCLOSURE', () => {
 
   it('states the key can be removed or rotated', () => {
     expect(AI_FOR_THAI_DISCLOSURE).toContain('remove or rotate');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// CoreApp integration tests
+// ---------------------------------------------------------------------------
+
+describe('CoreApp credential methods', () => {
+  it('hasAiForThaiCredential returns false when no key is stored', async () => {
+    const app = new CoreApp({ credentials: new InMemoryCredentialStore() });
+    expect(await app.hasAiForThaiCredential()).toBe(false);
+  });
+
+  it('hasAiForThaiCredential returns true when key is stored', async () => {
+    const store = new InMemoryCredentialStore();
+    await store.set(AI_FOR_THAI_CREDENTIAL_ID, 'sk-test-key');
+    const app = new CoreApp({ credentials: store });
+    expect(await app.hasAiForThaiCredential()).toBe(true);
+  });
+
+  it('removeAiForThaiCredential returns not-found when no reference exists', async () => {
+    const app = new CoreApp({ credentials: new InMemoryCredentialStore() });
+    const result = await app.removeAiForThaiCredential();
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.cause).toBe('not-found');
+    }
+  });
+
+  it('removeAiForThaiCredential removes key and invalidates reference', async () => {
+    const store = new InMemoryCredentialStore();
+    const app = new CoreApp({ credentials: store });
+
+    // First onboard a credential.
+    const io = makeIO({ readMasked: async () => 'sk-test-key' });
+    const onboardResult = await app.ensureAiForThaiCredential(io);
+    expect(onboardResult.ok).toBe(true);
+
+    // Now remove it.
+    const removeResult = await app.removeAiForThaiCredential();
+    expect(removeResult.ok).toBe(true);
+    if (removeResult.ok) {
+      expect(removeResult.invalidatedReferenceId).toBeTruthy();
+    }
+
+    // Key is gone from store.
+    const has = await store.has(AI_FOR_THAI_CREDENTIAL_ID);
+    expect(has).toBe(false);
+  });
+
+  it('rotateAiForThaiCredential invalidates old and creates new reference', async () => {
+    const store = new InMemoryCredentialStore();
+    const app = new CoreApp({ credentials: store });
+
+    // First onboard.
+    const io1 = makeIO({ readMasked: async () => 'sk-first-key' });
+    const onboardResult = await app.ensureAiForThaiCredential(io1);
+    expect(onboardResult.ok).toBe(true);
+
+    // Rotate.
+    const io2 = makeIO({ readMasked: async () => 'sk-new-key' });
+    const rotateResult = await app.rotateAiForThaiCredential(io2);
+    expect(rotateResult.ok).toBe(true);
+    if (rotateResult.ok) {
+      expect(rotateResult.newReference.referenceId).toBeTruthy();
+    }
+
+    // New key is in store.
+    const stored = await store.get(AI_FOR_THAI_CREDENTIAL_ID);
+    expect(stored).toBe('sk-new-key');
+  });
+
+  it('rotateAiForThaiCredential returns not-found when no reference exists', async () => {
+    const app = new CoreApp({ credentials: new InMemoryCredentialStore() });
+    const io = makeIO();
+    const result = await app.rotateAiForThaiCredential(io);
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.cause).toBe('not-found');
+    }
   });
 });

@@ -44,9 +44,9 @@ export async function onboardAiForThai(
 ): Promise<AiForThaiOnboardingResult> {
   // Headless/noninteractive fails closed before any Specialist request.
   if (!io.isTTY) {
-    io.out('AI-for-Thai credential onboarding requires an interactive terminal.');
-    io.err('cause: headless-blocked');
-    io.err('recovery: rerun interactively');
+    try { io.out('AI-for-Thai credential onboarding requires an interactive terminal.'); } catch { /* EPIPE */ }
+    try { io.err('cause: headless-blocked'); } catch { /* EPIPE */ }
+    try { io.err('recovery: rerun interactively'); } catch { /* EPIPE */ }
     return {
       ok: false,
       cause: 'headless-blocked',
@@ -57,13 +57,23 @@ export async function onboardAiForThai(
 
   // Disclosure: reviewed endpoint, separate credential purpose, OS credential
   // storage, and four-service scope.
-  io.out(AI_FOR_THAI_DISCLOSURE);
-  io.out('');
-  io.out('Enter your AI-for-Thai API key (input is masked):');
+  try { io.out(AI_FOR_THAI_DISCLOSURE); } catch { /* EPIPE */ }
+  try { io.out(''); } catch { /* EPIPE */ }
+  try { io.out('Enter your AI-for-Thai API key (input is masked):'); } catch { /* EPIPE */ }
 
-  const key = await io.readMasked();
+  let key: string | null;
+  try {
+    key = await io.readMasked();
+  } catch {
+    return {
+      ok: false,
+      cause: 'unknown-outcome',
+      message: 'AI-for-Thai credential onboarding interrupted by I/O error.',
+      nextActions: ['exit'],
+    };
+  }
   if (key === null) {
-    io.out('AI-for-Thai credential onboarding cancelled.');
+    try { io.out('AI-for-Thai credential onboarding cancelled.'); } catch { /* EPIPE */ }
     return {
       ok: false,
       cause: 'cancelled',
@@ -74,7 +84,7 @@ export async function onboardAiForThai(
 
   const trimmed = key.trim();
   if (trimmed.length === 0) {
-    io.out('Empty key — AI-for-Thai credential onboarding cancelled.');
+    try { io.out('Empty key — AI-for-Thai credential onboarding cancelled.'); } catch { /* EPIPE */ }
     return {
       ok: false,
       cause: 'cancelled',
@@ -87,8 +97,8 @@ export async function onboardAiForThai(
   // CredentialGroupId.
   try {
     await store.set(AI_FOR_THAI_CREDENTIAL_ID, trimmed);
-  } catch (e) {
-    io.err(`AI-for-Thai credential storage failed: ${(e as Error).message}`);
+  } catch {
+    try { io.err('AI-for-Thai credential storage failed.'); } catch { /* EPIPE */ }
     return {
       ok: false,
       cause: 'unhealthy',
@@ -98,7 +108,19 @@ export async function onboardAiForThai(
   }
 
   // Build the secret-free credential identity and fingerprint.
-  const now = clock();
+  let now: string;
+  try {
+    now = clock();
+  } catch {
+    // Clock unavailable after key was stored — clean up and return unknown-outcome.
+    try { await store.delete(AI_FOR_THAI_CREDENTIAL_ID); } catch { /* best-effort cleanup */ }
+    return {
+      ok: false,
+      cause: 'unknown-outcome',
+      message: 'Internal error: clock unavailable after key storage.',
+      nextActions: ['inspect', 'replace', 'remove', 'exit'],
+    };
+  }
   const credentialRevision = `rev-${now.replace(/[:.]/g, '-')}`;
   const identity = buildCredentialIdentity({
     credentialGroupId: AI_FOR_THAI_CREDENTIAL_ID,
@@ -122,11 +144,11 @@ export async function onboardAiForThai(
 
   if (!verifyResult.ok) {
     // Origin verification failed — remove the stored key and return unavailable.
-    io.err(`AI-for-Thai endpoint verification failed: ${verifyResult.safeExplanation}`);
+    try { io.err('AI-for-Thai endpoint verification failed.'); } catch { /* EPIPE */ }
     try {
       await store.delete(AI_FOR_THAI_CREDENTIAL_ID);
     } catch {
-      // Best-effort cleanup; continue with the failure result.
+      try { io.err('Warning: failed to remove stored key after verification failure.'); } catch { /* EPIPE */ }
     }
     return {
       ok: false,
@@ -144,7 +166,7 @@ export async function onboardAiForThai(
     storedAt: now,
   };
 
-  io.out('AI-for-Thai key stored. You can verify with /tools inspect <service>.');
+  try { io.out('AI-for-Thai key stored. You can verify with /tools inspect <service>.'); } catch { /* EPIPE */ }
   return {
     ok: true,
     fingerprint: identity.fingerprint,

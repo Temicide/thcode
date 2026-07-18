@@ -182,6 +182,7 @@ import type { ProofEnvironment, ProofResult } from './proof/types.js';
 import { sanitizer } from './security/sanitizer.js';
 import type { OnboardingIO } from './security/onboarding.js';
 import {
+  AI_FOR_THAI_CREDENTIAL_ID,
   onboardAiForThai,
   hasAiForThaiKey,
   InMemoryCredentialPersistence,
@@ -896,6 +897,9 @@ export class CoreApp {
       if (loaded.ok) {
         return { ok: true, fingerprint: loaded.reference.fingerprint, reference: loaded.reference };
       }
+      // Credential exists in store but reference is missing from persistence.
+      // Fall through to re-onboarding to rebuild the reference.
+      io.out('Credential found in store but reference is missing from persistence. Re-onboarding to rebuild reference...');
     }
 
     const result = await onboardAiForThai(this.credentials, io, this.clock);
@@ -920,9 +924,9 @@ export class CoreApp {
     if (!loaded.ok) {
       // Still try to remove from the credential store.
       try {
-        await this.credentials.delete('aiforthai');
+        await this.credentials.delete(AI_FOR_THAI_CREDENTIAL_ID);
       } catch {
-        // Best-effort.
+        // Best-effort cleanup; continue with not-found result.
       }
       return { ok: false, cause: 'not-found', message: 'No AI-for-Thai credential reference to remove.' };
     }
@@ -931,13 +935,16 @@ export class CoreApp {
 
     // Remove from credential store.
     try {
-      await this.credentials.delete('aiforthai');
-    } catch (e) {
-      return { ok: false, cause: 'store-error', message: `Failed to remove AI-for-Thai credential from store: ${(e as Error).message}` };
+      await this.credentials.delete(AI_FOR_THAI_CREDENTIAL_ID);
+    } catch {
+      return { ok: false, cause: 'store-error', message: 'Failed to remove AI-for-Thai credential from store.' };
     }
 
     // Invalidate the persistence reference.
-    await this._aiforthaiPersistence.invalidate();
+    const invalidateResult = await this._aiforthaiPersistence.invalidate();
+    if (!invalidateResult.ok) {
+      return { ok: false, cause: 'store-error', message: 'Failed to invalidate credential reference after removal.' };
+    }
 
     return { ok: true, invalidatedReferenceId: refId };
   }
@@ -957,13 +964,16 @@ export class CoreApp {
 
     // Remove from credential store.
     try {
-      await this.credentials.delete('aiforthai');
-    } catch (e) {
-      return { ok: false, cause: 'store-error', message: `Failed to remove old AI-for-Thai credential: ${(e as Error).message}`, nextActions: ['inspect', 'replace', 'remove', 'exit'] };
+      await this.credentials.delete(AI_FOR_THAI_CREDENTIAL_ID);
+    } catch {
+      return { ok: false, cause: 'store-error', message: 'Failed to remove old AI-for-Thai credential from store.', nextActions: ['inspect', 'replace', 'remove', 'exit'] };
     }
 
     // Invalidate the persistence reference.
-    await this._aiforthaiPersistence.invalidate();
+    const invalidateResult = await this._aiforthaiPersistence.invalidate();
+    if (!invalidateResult.ok) {
+      return { ok: false, cause: 'store-error', message: 'Failed to invalidate old credential reference during rotation.', nextActions: ['inspect', 'replace', 'remove', 'exit'] };
+    }
 
     // Run the onboarding flow for the new key.
     const result = await onboardAiForThai(this.credentials, io, this.clock);
