@@ -31,6 +31,8 @@ import type { PreparedArtifact } from '../artifacts/types.js';
 export function computePayloadByteDigest(artifacts: readonly PreparedArtifact[]): string {
   const hash = createHash('sha256');
   for (const artifact of artifacts) {
+    hash.update(artifact.contentKind);
+    hash.update('\n');
     hash.update(artifact.mediaType);
     hash.update('\n');
     hash.update(artifact.contentHash);
@@ -69,6 +71,20 @@ export function buildSpecialistPreparedPayloadManifest(
   input: SpecialistManifestInput,
 ): PreparedPayloadManifest {
   const { proposal, preparedArtifacts, effectiveConfiguration, registryEntry } = input;
+
+  // Cross-validate that proposal, configuration, and registry entry agree on
+  // the service identity. An inconsistent set would produce a manifest with
+  // mismatched recipient/endpoint/purpose.
+  if (proposal.serviceId !== effectiveConfiguration.serviceId) {
+    throw new Error(
+      `Proposal serviceId "${proposal.serviceId}" does not match effective configuration serviceId "${effectiveConfiguration.serviceId}"`,
+    );
+  }
+  if (proposal.serviceId !== registryEntry.id) {
+    throw new Error(
+      `Proposal serviceId "${proposal.serviceId}" does not match registry entry id "${registryEntry.id}"`,
+    );
+  }
 
   // Map sources from artifacts.
   const sources: readonly SelectedSource[] = preparedArtifacts.map((a) => ({

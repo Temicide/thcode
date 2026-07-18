@@ -2,7 +2,9 @@
 title: 'Story 4.8: Prepare exact payload identity and independent transfer consent'
 type: 'feature'
 created: '2026-07-17'
-status: 'ready-for-dev'
+status: 'done'
+baseline_revision: '5b11fc2'
+final_revision: 'f8accb9'
 review_loop_iteration: 0
 followup_review_recommended: false
 context:
@@ -91,11 +93,60 @@ warnings: []
 
 ## Design Notes
 
-Reuse `cli/src/core/permissions/transferConsent.ts` EXACTLY — import `PreparedPayloadManifest`, `TransferConsent`, `buildPreparedPayloadManifest`, `computeManifestDigest`, `evaluateTransferConsent`, `revalidateTransferConsent`, `assessPreparedPayloadSafety`, `detectUnsafePreparedContent`, `SelectedSource`, `PayloadClassification`, `TransformationPolicy`, `Recipient`, `RetentionHandling`, `ConsentEvaluationResult`, `PREPARED_PAYLOAD_MANIFEST_VERSION`. Do NOT re-implement. The Specialist module is a mapping + projection layer. `SelectedSource.identity` = the artifact's `sourceIdentity.canonicalPath` (or displayPath — prefer canonicalPath; it's not the raw secret, it's a workspace path, which is acceptable as identity per the existing contract: "path/hash/metadata, never the raw bytes"). `sourceHash` = the artifact's `contentHash` (post-minimization). `PayloadClassification` mapping: artifact `privacyClassification` `public`→`public`, `internal`→`internal`, `secret`→ should never reach here (4.6 blocks secret) but if it does → `unresolved` (blocked). `sensitive` is not in the artifact's PrivacyClassification (`public`|`internal`|`secret`) — map `internal` to `internal` and `public` to `public`; if the registry entry's `privacyClassification.requiresConsent` is true, the consent gate already enforces it. The manifest `classification` field uses `PayloadClassification` (`public`|`internal`|`sensitive`|`unresolved`): map `internal`→`internal`, `public`→`public`, and when `entry.privacyClassification.requiresConsent` or dataClasses include sensitive classes → `sensitive`. `resolveRetentionHandling` keyword matching: policy string containing "no-retention"/"none"/"zero-retention"/"retention:none" → `upstream-no-retention-verified` (only if `providerDeletionSupported` is consistent or policy explicitly says no retention needed); "deletion-confirmed" → `deletion-confirmed`; "deletion-not-required"/"not-required" → `deletion-not-required`; else `unknown`. Be conservative — when in doubt, `unknown` (blocked). `computePayloadByteDigest`: for each artifact in order, frame as `<mediaType>:<contentHash>:<len>:<content bytes>` and hash the concatenation (the framing ensures order + identity matters; an empty payload still hashes the framing). Use `createHash('sha256')`. The app accessor: `authorityRevision: a.revision` (activation revision, matching existing app.ts convention), `policyVersion: 1` (existing convention), `now: this.clock()`. Sanitizer: reuse `sanitizer.sanitize(text, contentClass)` for text payloads; for binary payloads, the sanitizer operates on text so pass an empty/safe string and rely on `detectUnsafePreparedContent` for path/secret markers — keep it simple and consistent with how Story 2.6 expects. Inject `clock`; no `new Date()`/`Date.now()`/`Math.random()` in the new pure functions. Tests: vitest, build `PreparedArtifact` fixtures directly, no real network/fs.
+Reuse `cli/src/core/permissions/transferConsent.ts` EXACTLY — import `PreparedPayloadManifest`, `TransferConsent`, `buildPreparedPayloadManifest`, `computeManifestDigest`, `evaluateTransferConsent`, `revalidateTransferConsent`, `assessPreparedPayloadSafety`, `detectUnsafePreparedContent`, `SelectedSource`, `PayloadClassification`, `TransformationPolicy`, `Recipient`, `RetentionHandling`, `ConsentEvaluationResult`, `PREPARED_PAYLOAD_MANIFEST_VERSION`. Do NOT re-implement. The Specialist module is a mapping + projection layer. `SelectedSource.identity` = the artifact's `sourceIdentity.canonicalPath` (or displayPath — prefer canonicalPath; it's not the raw secret, it's a workspace path, which is acceptable as identity per the existing contract: "path/hash/metadata, never the raw bytes"). `sourceHash` = the artifact's `contentHash` (post-minimization). `PayloadClassification` mapping: artifact `privacyClassification` `public`→`public`, `internal`→`internal`, `secret`→ should never reach here (4.6 blocks secret) but if it does → `unresolved` (blocked). `sensitive` is not in the artifact's PrivacyClassification (`public`|`internal`|`secret`) — map `internal` to `internal` and `public` to `public`; if the registry entry's `privacyClassification.requiresConsent` is true, the consent gate already enforces it. The manifest `classification` field uses `PayloadClassification` (`public`|`internal`|`sensitive`|`unresolved`): map `internal`→`internal`, `public`→`public`, and when `entry.privacyClassification.requiresConsent` or dataClasses include sensitive classes → `sensitive`. `resolveRetentionHandling` keyword matching: policy string containing "no-retention"/"none"/"zero-retention"/"retention:none" → `upstream-no-retention-verified` (only if `providerDeletionSupported` is consistent or policy explicitly says no retention needed); "deletion-confirmed" → `deletion-confirmed`; "deletion-not-required"/"not-required" → `deletion-not-required`; else `unknown`. Be conservative — when in doubt, `unknown` (blocked). `computePayloadByteDigest`: for each artifact in order, frame as `<mediaType>\n<contentHash>\n<len>\n<content bytes>` (newline-delimited, not colon-delimited — colons can appear in media types like `application/vnd.api+json`) and hash the concatenation (the framing ensures order + identity matters; an empty payload still hashes the framing). Use `createHash('sha256')`. The app accessor: `authorityRevision: a.revision` (activation revision, matching existing app.ts convention), `policyVersion: 1` (existing convention), `now: this.clock()`. Sanitizer: reuse `sanitizer.sanitize(text, contentClass)` for text payloads; for binary payloads, the sanitizer operates on text so pass an empty/safe string and rely on `detectUnsafePreparedContent` for path/secret markers — keep it simple and consistent with how Story 2.6 expects. Inject `clock`; no `new Date()`/`Date.now()`/`Math.random()` in the new pure functions. Tests: vitest, build `PreparedArtifact` fixtures directly, no real network/fs.
 
-## Verification
+## Spec Change Log
 
-**Commands:**
-- `npm run build` -- expected: tsc compiles with no errors.
-- `npm test -- specialistConsent` -- expected: all cases pass.
-- `npm test` -- expected: full suite green, no regressions.
+### 2026-07-18 — bad_spec: framing delimiter in computePayloadByteDigest design notes
+- **Triggering finding:** Blind Hunter finding #2 — spec design notes specified colon-delimited framing (`<mediaType>:<contentHash>:<len>:<content bytes>`) but implementation uses newline-delimited framing (`<mediaType>\n<contentHash>\n<len>\n<content bytes>`).
+- **What was amended:** Design Notes section: changed framing description from colon-delimited to newline-delimited, with rationale that colons can appear in media types like `application/vnd.api+json`.
+- **Known-bad state avoided:** Colon-delimited framing would be ambiguous when media types contain colons.
+- **KEEP instructions:** Newline-delimited framing is correct and more robust. The implementation is correct; only the spec design notes were wrong.
+
+## Review Triage Log
+
+### 2026-07-18 — Review pass
+- intent_gap: 0
+- bad_spec: 1 (high 1, medium 0, low 0)
+- patch: 5 (high 0, medium 2, low 3)
+- defer: 3 (high 0, medium 1, low 2)
+- reject: 4 (high 0, medium 0, low 4)
+- addressed_findings:
+  - `[high]` `[bad_spec]` Spec design notes said colon-delimited framing; implementation uses newlines. Updated spec design notes to match implementation (newlines are more robust for media types containing colons).
+  - `[medium]` `[patch]` Added cross-validation in `buildSpecialistPreparedPayloadManifest` to verify `proposal.serviceId` matches `effectiveConfiguration.serviceId` and `registryEntry.id`.
+  - `[medium]` `[patch]` Added `contentKind` to `computePayloadByteDigest` framing to eliminate theoretical ambiguity between text and binary artifacts with identical mediaType/hash/bytes.
+  - `[low]` `[patch]` Fixed dev assertion in `buildConsentDialogSummary` to stringify the full summary (not just a subset) for leak detection.
+  - `[low]` `[patch]` Fixed dev assertion in `buildConsentDialogSummary` to check text segments individually (avoiding false negatives from JSON escaping of special characters).
+  - `[low]` `[patch]` Removed misleading empty `if (a.bytes)` block from dev assertion in `buildConsentDialogSummary`.
+
+## Auto Run Result
+
+**Summary:** Implemented Story 4.8 — Specialist consent module that specializes the existing Story 2.6 transfer consent contracts. Adds `buildSpecialistPreparedPayloadManifest` (maps routing proposal + prepared/minimized artifacts + effective configuration + registry entry into a `PreparedPayloadManifest` binding both canonical manifest digest and exact payload-byte digest), `requestSpecialistTransferConsent` / `revalidateSpecialistTransferConsent` (wraps generic evaluate/revalidate with Specialist context), `toConsentReference` (secret-free handle for Evidence/dialog), `buildConsentDialogSummary` (secret-free transfer-consent-dialog surface with initial focus `consent-review`), and `resolveRetentionHandling` (conservative keyword matching per AD-26.1). App.ts accessors wire activation/authority/policy context and sanitizer. 44 unit tests cover all I/O matrix rows and ACs.
+
+**Files changed:**
+- `cli/src/core/specialists/consent/types.ts` — NEW. ConsentReference, ConsentDialogSummary, SpecialistManifestInput, SpecialistConsentInput, SpecialistRevalidationInput.
+- `cli/src/core/specialists/consent/retention.ts` — NEW. Conservative resolveRetentionHandling.
+- `cli/src/core/specialists/consent/manifest.ts` — NEW. computePayloadByteDigest + buildSpecialistPreparedPayloadManifest (with cross-validation).
+- `cli/src/core/specialists/consent/consent.ts` — NEW. requestSpecialistTransferConsent + revalidateSpecialistTransferConsent + toConsentReference.
+- `cli/src/core/specialists/consent/dialog.ts` — NEW. buildConsentDialogSummary (secret-free, dev assertion for leak detection).
+- `cli/src/core/specialists/consent/index.ts` — NEW. Barrel exports.
+- `cli/src/core/app.ts` — MODIFY. Added prepareSpecialistPayload, requestSpecialistTransferConsent, revalidateSpecialistTransferConsent accessors.
+- `cli/test/specialistConsent.test.ts` — NEW. 44 tests covering all I/O matrix rows + ACs.
+- `_bmad-output/implementation-artifacts/4-8-prepare-exact-payload-identity-and-independent-transfer-consent.md` — MODIFY. Updated design notes (framing delimiter), added Spec Change Log, Review Triage Log, Auto Run Result.
+
+**Review findings breakdown:**
+- Patches applied: 5 (cross-validation, contentKind in framing, dev assertion full-summary check, escaped-char fix, removed empty bytes block)
+- Items deferred: 3 ("none" keyword breadth, sanitization size limits, full PreparedArtifact[] parameter)
+- Items rejected: 4 (contractVersion usage, redundant digest fields, initialFocus hardcoded, downstream validation sufficiency)
+
+**Follow-up review recommendation:** false — all patches were localized, low-to-medium severity, and the review-driven changes are limited to internal robustness (cross-validation, framing completeness, dev assertion accuracy) with no behavior/API/security/data impact on the consent flow itself.
+
+**Verification performed:**
+- `npm run build` — tsc compiles with 0 errors.
+- `npx vitest run specialistConsent` — 44 tests passed.
+- `npx vitest run` — 58 test files, 1600 tests passed, full suite green.
+
+**Residual risks:**
+- "none" keyword match in `resolveRetentionHandling` is broad (deferred).
+- Sanitization of large text payloads has no size limit (deferred).
+- `buildConsentDialogSummary` accepts full `PreparedArtifact[]` instead of safe projection (deferred).

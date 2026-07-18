@@ -40,21 +40,50 @@ export function buildConsentDialogSummary(
   const totalSizeBytes = artifacts.reduce((sum, a) => sum + a.sizeBytes, 0);
 
   // Dev-only assertion: ensure no raw bytes/text leak into the summary.
+  // Stringifies the FULL return value (not just a subset) to catch any field
+  // that might accidentally contain artifact content.
   if (process.env.NODE_ENV === 'development' || process.env.NODE_ENV === 'test') {
-    const summaryJson = JSON.stringify({
-      sourceIdentities,
-      totalSizeBytes,
-      sourceCount: artifacts.length,
-    });
-    // Check that no artifact text or bytes appear in the summary.
+    // Build a preliminary summary to check for leaks before returning.
+    const preliminarySummary: ConsentDialogSummary = {
+      recipient: {
+        capabilityId: manifest.recipient.capabilityId,
+        capabilityVersion: manifest.recipient.capabilityVersion,
+        verifiedEndpoint: manifest.recipient.verifiedEndpoint,
+        method: manifest.recipient.method,
+      },
+      purpose: manifest.purpose,
+      safePayloadSummary: {
+        sourceCount: artifacts.length,
+        totalSizeBytes,
+        sourceIdentities,
+        classification: manifest.classification,
+        retentionStatus: manifest.retention,
+        payloadDigest: manifest.payloadByteDigest,
+        manifestDigest: manifest.manifestDigest,
+      },
+      sideEffects,
+      manifestDigest: manifest.manifestDigest,
+      payloadDigest: manifest.payloadByteDigest,
+      consentReference,
+      initialFocus: 'consent-review',
+    };
+    const summaryJson = JSON.stringify(preliminarySummary);
+    // Check that no artifact text appears in the summary. Use a substring
+    // check on the raw text (not the JSON-escaped form) — JSON.stringify
+    // escapes double quotes, backslashes, and control characters, so we
+    // check the original text against the unescaped JSON to catch leaks
+    // even when the text contains characters that JSON would escape.
     for (const a of artifacts) {
-      if (a.text && summaryJson.includes(a.text)) {
-        throw new Error('ASSERTION FAILED: artifact text leaked into consent dialog summary');
-      }
-      if (a.bytes) {
-        // For bytes, check that the byte length doesn't appear as a content leak.
-        // This is a best-effort check; the real protection is structural (we
-        // never include bytes/text in the summary fields).
+      if (a.text && a.text.length > 0) {
+        // Check each line/segment of the text individually to avoid false
+        // negatives from JSON escaping. A short text that appears in the
+        // JSON will still be findable as a substring of the raw JSON string.
+        const textSegments = a.text.split(/\s+/).filter((s) => s.length >= 4);
+        for (const segment of textSegments) {
+          if (summaryJson.includes(segment)) {
+            throw new Error('ASSERTION FAILED: artifact text leaked into consent dialog summary');
+          }
+        }
       }
     }
   }

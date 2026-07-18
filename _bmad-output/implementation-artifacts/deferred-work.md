@@ -22,3 +22,12 @@
 - source_spec: `_bmad-output/implementation-artifacts/4-6-resolve-explicit-artifacts-and-preserve-source-identity.md`
   summary: `serviceAcceptsOnlyText` check misses `application/x-yaml` and other text-like types beyond the hardcoded list.
   evidence: `cli/src/core/specialists/artifacts/resolver.ts` line 698-700 hardcodes a specific set of text-like types. Edge case; the check is only reached for binary files with no extractor against a text-only service.
+- source_spec: `_bmad-output/implementation-artifacts/4-8-prepare-exact-payload-identity-and-independent-transfer-consent.md`
+  summary: `resolveRetentionHandling` substring match for "none" is broad — could match "deletion-none" or "none-required" policies, incorrectly classifying them as `upstream-no-retention-verified`.
+  evidence: `cli/src/core/specialists/consent/retention.ts` line 37 uses `policy.includes('none')` which matches any policy containing the substring "none". Spec design notes list "none" as a keyword; the concern is a pre-existing design choice.
+- source_spec: `_bmad-output/implementation-artifacts/4-8-prepare-exact-payload-identity-and-independent-transfer-consent.md`
+  summary: `requestSpecialistTransferConsent` in app.ts joins all text artifacts for sanitization without size limits — large payloads could produce a very large sanitizer input string.
+  evidence: `cli/src/core/app.ts` joins all text artifacts with `\n` and passes to sanitizer. The sanitizer result's `value` field is unused; only `ok` and `omissions` matter for `assessPreparedPayloadSafety`.
+- source_spec: `_bmad-output/implementation-artifacts/4-8-prepare-exact-payload-identity-and-independent-transfer-consent.md`
+  summary: `buildConsentDialogSummary` takes full `PreparedArtifact[]` but only uses safe subset of fields — future code changes could accidentally leak artifact content.
+  evidence: `cli/src/core/specialists/consent/dialog.ts` accepts `readonly PreparedArtifact[]` but only extracts `sourceIdentity.canonicalPath`, `mediaType`, `sizeBytes`, and `contentHash`. Should accept `readonly SafeSourceIdentity[]` instead.
