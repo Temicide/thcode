@@ -1,76 +1,22 @@
-// Active Model Context construction (ADR 0014) and the Context Donut
-// measurement (ADR 0015). These are EXTENSION POINTS for the prototype:
-// interfaces only — compaction, pinning, and token estimation are future work.
-
 import type { NormalizedMessage } from '../providers/types.js';
-
-export interface ContextBuildResult {
-  /** Messages selected for the next provider request. */
-  readonly messages: readonly NormalizedMessage[];
-  /** Estimated tokens of the projected request (estimate, not verified). */
-  readonly estimatedTokens: number;
-}
-
-/**
- * Builds the bounded Active Model Context from instructions, recent turns,
- * pinned turns, evidence, and summaries (ADR 0014).
- *
- * TODO(context-compaction): implement Automatic Compaction targeting <=70%
- * utilization before any provider call that would exceed Effective Context
- * Capacity, plus Irreducible Context Overflow blocking with a token breakdown.
- */
-export interface ContextBuilder {
-  build(history: readonly NormalizedMessage[], newInput: string): ContextBuildResult;
-}
-
-/**
- * Effective Context Capacity (ADR 0015): raw context limit minus reserved
- * response space (max(configured output, 8%)) minus safety margin
- * (max(2048, 2%)). Provider-specific limits override this fallback.
- */
-export function effectiveContextCapacity(rawLimit: number, configuredMaxOutput = 0): number {
-  const responseReserve = Math.max(configuredMaxOutput, Math.ceil(rawLimit * 0.08));
-  const safety = Math.max(2048, Math.ceil(rawLimit * 0.02));
-  return rawLimit - responseReserve - safety;
-}
-
-/**
- * Active Context Utilization percentage for the Context Donut / `Ctx N%`
- * textual fallback (ADR 0015).
- *
- * TODO(context-donut): segmented Unicode ring + severity styling in the UI;
- * the core only supplies the number.
- */
-export function contextUtilizationPercent(estimatedTokens: number, capacity: number): number {
-  if (capacity <= 0) return 100;
-  return Math.round((estimatedTokens / capacity) * 100);
-}
-
-/**
- * Null-aware Effective Context Capacity (PR-4, epics.md Pre-Implementation
- * Gate). `rawLimit` is a provider's verified raw context limit, or `null`
- * when no sourced/verified limit exists (e.g. Typhoon today). `null` in ⇒
- * the canonical `'percentage unavailable'` token out — never a `128k`/
- * `115,200`-derived number. `effectiveContextCapacity()` itself stays
- * available, unchanged, for the verified-limit case.
- */
-export function effectiveContextCapacityOrUnavailable(
-  rawLimit: number | null,
-  configuredMaxOutput = 0,
-): number | 'percentage unavailable' {
-  if (rawLimit === null) return 'percentage unavailable';
-  return effectiveContextCapacity(rawLimit, configuredMaxOutput);
-}
-
-/**
- * Null-aware Active Context Utilization percentage (PR-4). Propagates
- * `'percentage unavailable'` from an unavailable capacity rather than
- * computing a fabricated numeric percentage against an unverified capacity.
- */
-export function contextUtilizationPercentOrUnavailable(
-  estimatedTokens: number,
-  capacity: number | 'percentage unavailable',
-): number | 'percentage unavailable' {
-  if (capacity === 'percentage unavailable') return 'percentage unavailable';
-  return contextUtilizationPercent(estimatedTokens, capacity);
-}
+export type SourceClass='application'|'user'|'workspace'|'artifact'|'tool-result'|'specialist'|'remote-provider'|'system';
+export type TrustClassification='trusted-instruction'|'trusted-schema'|'untrusted-data'|'instruction-inert'|'unknown';
+export type InclusionMode='verbatim'|'summarized'|'compacted'|'pinned'|'protected'|'excluded'|'unavailable'|'required'|'recent'|'evidence'|'summary'|'omitted';
+export type MeasurementQuality='estimated'|'provider-reported'|'locally-measured'|'fallback'|'unknown'|'percentage unavailable';
+export type OmissionReason='capacity'|'untrusted'|'duplicate'|'superseded'|'not-selected'|'protected-overflow'|'invalid';
+export type UtilizationBand='green'|'amber'|'orange'|'red'|'percentage unavailable';
+export interface ContextSource{readonly sourceClass:SourceClass;readonly trust:TrustClassification;readonly provenance:string;readonly sourceId?:string;readonly digest?:string}
+export interface ContextTransformation{readonly kind:'selected'|'delimited'|'summarized'|'compacted'|'omitted';readonly at:string;readonly reason?:string;readonly sourceIds?:readonly string[]}
+export interface ContextItem{readonly id:string;readonly role:NormalizedMessage['role'];readonly content:string;readonly source:ContextSource;readonly inclusion:InclusionMode;readonly protected:boolean;readonly estimatedTokens:number;readonly measuredBytes:number;readonly measurementQuality:MeasurementQuality;readonly omissionReason?:OmissionReason;readonly transformations:readonly ContextTransformation[];readonly pinId?:string}
+export interface ContextCapacity{readonly rawLimit:number|null;readonly effective:number|'percentage unavailable';readonly responseReserve:number|'percentage unavailable';readonly safetyMargin:number|'percentage unavailable';readonly configuredMaxOutput:number;readonly measurementQuality:MeasurementQuality}
+export interface ContextUtilization{readonly tokens:number;readonly capacity:number|'percentage unavailable';readonly percent:number|'percentage unavailable';readonly band:UtilizationBand}
+export interface ContextDecision{readonly itemId:string;readonly included:boolean;readonly mode:InclusionMode;readonly reason?:OmissionReason;readonly provenance:string}
+export interface ContextBuildResult{readonly messages:readonly NormalizedMessage[];readonly items:readonly ContextItem[];readonly estimatedTokens:number;readonly utilization:ContextUtilization;readonly capacity:ContextCapacity;readonly omissions:readonly ContextItem[];readonly transformations:readonly ContextTransformation[]}
+export interface ContextBuilderInput{readonly history:readonly NormalizedMessage[];readonly newInput:string;readonly sessionId?:string;readonly now?:string;readonly capacity?:ContextCapacity;readonly pins?:readonly {readonly target:{readonly itemId:string;readonly transcriptIdentity:string};readonly status:string}[]}
+export interface ContextBuilder{build(input:ContextBuilderInput):ContextBuildResult}
+export function validCapacity(raw:number|null,output=0):raw is number{return raw!==null&&Number.isFinite(raw)&&raw>0&&Number.isFinite(output)&&output>=0}
+export function effectiveContextCapacity(raw:number,output=0):number{return validCapacity(raw,output)?Math.max(0,raw-Math.max(output,Math.ceil(raw*.08))-Math.max(2048,Math.ceil(raw*.02))):0}
+export function effectiveContextCapacityOrUnavailable(raw:number|null,output=0):number|'percentage unavailable'{return validCapacity(raw,output)?effectiveContextCapacity(raw,output):'percentage unavailable'}
+export function contextUtilizationPercent(tokens:number,capacity:number):number{return capacity>0?Math.round(tokens/capacity*100):100}
+export function contextUtilizationPercentOrUnavailable(tokens:number,capacity:number|'percentage unavailable'):number|'percentage unavailable'{return capacity==='percentage unavailable'?capacity:contextUtilizationPercent(tokens,capacity)}
+export function utilizationBand(p:number|'percentage unavailable'):UtilizationBand{return p==='percentage unavailable'?p:p<70?'green':p<85?'amber':p<95?'orange':'red'}

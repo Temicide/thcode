@@ -2,9 +2,9 @@
 title: 'Govern Active Context and Usage'
 type: 'feature'
 created: '2026-07-18'
-status: 'blocked'
-baseline_revision: 'cb0047808b9f37be5be2f6b891a81c89e9390330'
-review_loop_iteration: 1
+status: 'ready'
+baseline_revision: '396005120abfe5168706a221e8d23502289aebe9'
+review_loop_iteration: 4
 followup_review_recommended: false
 context:
   - '{project-root}/_bmad-output/project-context.md'
@@ -91,6 +91,27 @@ The existing Typhoon adapter owns JSON serialization, so reshape its port to mak
 - **Avoids:** Provider calls that bypass context governance; approvals/manifests that attest to bytes other than the transmitted request; runtime foreign-key failures or non-durable manifests; extension records visible without post-commit Evidence.
 - **KEEP:** Preserve the canonical type separation, fail-closed unknown capacity behavior, sanitizer use, deterministic rendering intent, and successful build/test baseline.
 
+### 2026-07-18 — Governance integration re-derivation
+- **Trigger:** The implementation introduced context helper modules but left builder selection unbounded, dispatch/provider finalization optional, manifests and provider-reported usage detached from production dispatch, and pin/compaction/recovery state in memory rather than reconstructed durably.
+- **Amendment:** Require the concrete production dispatch path, AgentLoop, and CoreApp to invoke one mandatory context pipeline that validates finite positive capacity; builds bounded candidates with explicit omissions; compacts then evaluates categorized overflow; finalizes and persists a deterministic manifest bound to exact network bytes; revalidates manifest/authority immediately before send; and records/reconstructs pins, compactions, usage, and manifest evidence atomically. Require corruption to remain sticky in recovery and reject malformed protocol versions and usage values.
+- **Execution reset:** Revert the incomplete implementation before re-deriving it. Named integration tests must exercise production callers and restart/crash/key-loss paths, not only helpers.
+- **Avoids:** Direct provider bypasses, oversized or mismatched transmitted context, lost durable governance state, fabricated/double-counted usage, and recovery that authorizes after corruption.
+- **KEEP:** Preserve exact-byte Typhoon finalization, source-labelled instruction-inert data, capacity helper compatibility, encrypted extension primitives, and offline build/test coverage.
+
+### 2026-07-18 — Projection and recovery re-derivation
+- **Trigger:** The re-derived code still exposed placeholder `/context` and `/usage` results, failed to parse Typhoon usage, persisted transcript entries before a failed gate, and treated extension corruption, replay, manifest identity, and capacity-overflow boundaries unsafely.
+- **Amendment:** Require canonical commands/renderers to read the same persisted manifest, contributor, pin, and categorized usage records produced by successful dispatch; parse and reconcile provider usage. A failed gate must create no duplicate transcript record. Extension append must validate and idempotently return the existing committed event; record-list/recovery APIs must surface sticky corruption and advance high-water over every consumed record. Manifest identity must use protocol opaque IDs, metadata must be integrity-bound, and invalid/empty finalized bytes must fail before a provider call.
+- **Execution reset:** Revert this incomplete iteration and add direct tests for each failed-gate, command-rendering, provider-usage, replay, corruption, manifest-tamper, and protected-overflow path.
+- **Avoids:** Misleading context/usage UI, duplicate transcript evidence, silent corruption, non-idempotent recovery, and provider calls backed by unauthenticated bytes or unbounded protected context.
+- **KEEP:** Preserve the mandatory pipeline, finite-capacity fail-closed logic, deterministic source-labelled builder, atomic encrypted persistence, and existing successful test baseline.
+
+### 2026-07-18 — End-to-end evidence re-derivation
+- **Trigger:** The implementation again left command results disconnected from governance state and retained unsafe gate, transcript, extension, corruption, manifest, capacity, and provider-usage paths; several added modules also suppressed TypeScript checking with `@ts-nocheck`.
+- **Amendment:** Production code must be strict TypeScript with no `@ts-nocheck`. Require all listed Epic 5 modules to be connected to the actual CoreApp and AgentLoop turns and canonical command renderers; not merely exported helpers. Every reviewer finding is a required direct test, including unknown-capacity classification, authenticated manifest metadata, finite/non-empty bytes, protected-overflow stops, durable-event validation/idempotency, corruption surfacing, and no duplicate transcript on a blocked retry.
+- **Execution reset:** Revert the disconnected implementation and re-derive from the strict baseline. Passing legacy tests does not demonstrate Epic 5 completion.
+- **Avoids:** Test-only governance, suppressed type errors, misleading command output, silent corruption, and fail-open dispatch behavior.
+- **KEEP:** Preserve the specification’s immutable transcript, exact-byte, durable evidence, and fail-closed invariants.
+
 ## Review Triage Log
 
 ### 2026-07-18 — Review pass
@@ -107,6 +128,63 @@ The existing Typhoon adapter owns JSON serialization, so reshape its port to mak
   - [high] [bad_spec] Context extension storage and journal publication occur in separate transactions, allowing non-post-commit extension visibility after a crash.
   - [high] [bad_spec] No Epic 5 tests were added despite the specification requiring named contract, dispatch, persistence, recovery, and rendering coverage.
 
+### 2026-07-18 — Review pass
+- intent_gap: 0
+- bad_spec: 10: (high 10)
+- patch: 0
+- defer: 0
+- reject: 13
+- addressed_findings:
+  - [high] [bad_spec] The builder marks old turns compacted but still selects and transmits them, so the active context is not bounded.
+  - [high] [bad_spec] The production dispatch and AgentLoop pipelines retain optional gate/finalizer fallbacks and do not enforce manifest, compaction, overflow, or authority checks before every provider call.
+  - [high] [bad_spec] CoreApp never finalizes or persists a context manifest and exposes null manifest evidence after dispatch.
+  - [high] [bad_spec] Pins, compactions, and usage remain in-memory projections rather than atomic extension evidence reconstructed after restart.
+  - [high] [bad_spec] Compaction can exceed its claimed 70% target and protected overflow has no mandatory categorized stop before dispatch.
+  - [high] [bad_spec] Provider-reported usage is not incorporated into the usage projection and local counters can double-count it.
+  - [high] [bad_spec] Recovery can hide a corrupt high-water record or later downgrade a partial/corrupt state to available.
+  - [high] [bad_spec] Extension identifiers can collide for same-kind records created in the same millisecond.
+  - [high] [bad_spec] The provider adapter accepts caller-supplied finalized bytes without validating their digest/request binding.
+  - [high] [bad_spec] The implementation lacks the specified production-path and durable recovery integration coverage.
+
+### 2026-07-18 — Review pass
+- intent_gap: 0
+- bad_spec: 11: (high 11)
+- patch: 0
+- defer: 0
+- reject: 8
+- addressed_findings:
+  - [high] [bad_spec] `/context` and `/usage` render hard-coded placeholders rather than the dispatch pipeline’s canonical evidence.
+  - [high] [bad_spec] Typhoon does not parse provider-reported usage, so usage cannot be attributed or reconciled.
+  - [high] [bad_spec] A failed gate persists a user transcript entry, allowing retry duplicates.
+  - [high] [bad_spec] Pin state is not command/projection/recovery integrated.
+  - [high] [bad_spec] Unknown capacity is misclassified as protected overflow even with no protected content.
+  - [high] [bad_spec] Extension publication bypasses durable-event validation and idempotency.
+  - [high] [bad_spec] Corrupt extension records are silently dropped and recovery high-water does not cover consumed corrupt records.
+  - [high] [bad_spec] A permissive injected gate can bypass unavailable capacity and invalid/empty finalized bytes are not rejected.
+  - [high] [bad_spec] Manifest metadata integrity and protocol identity are not enforced.
+  - [high] [bad_spec] Protected context can remain above capacity without a mandatory blocked result.
+  - [high] [bad_spec] The new integration tests do not cover the reviewed production failure and recovery paths.
+
+### 2026-07-18 — Review pass
+- intent_gap: 0
+- bad_spec: 12: (high 12)
+- patch: 0
+- defer: 0
+- reject: 6
+- addressed_findings:
+  - [high] [bad_spec] Canonical context and usage commands render placeholders, not dispatch evidence.
+  - [high] [bad_spec] Provider usage is not parsed or reconciled.
+  - [high] [bad_spec] Blocked requests create duplicate durable user entries on retry.
+  - [high] [bad_spec] Pins are not available through commands, projection, or recovery.
+  - [high] [bad_spec] Unknown capacity is incorrectly rendered as protected overflow.
+  - [high] [bad_spec] Extension append bypasses event validation and idempotency.
+  - [high] [bad_spec] Corrupt encrypted extensions are omitted instead of surfacing sticky recovery state.
+  - [high] [bad_spec] High-water accounting excludes consumed corrupt records.
+  - [high] [bad_spec] A caller-supplied gate can bypass capacity governance and finalized bytes are not structurally validated.
+  - [high] [bad_spec] Manifest metadata is not integrity-bound and manifest IDs do not follow the protocol identity contract.
+  - [high] [bad_spec] Compaction can return context whose protected content exceeds capacity without a mandatory stop.
+  - [high] [bad_spec] New context modules use `@ts-nocheck`, violating strict project conventions and concealing contract errors.
+
 ## Auto Run Result
 
 **Status:** ready
@@ -122,6 +200,12 @@ No implementation, commit, push, or runtime verification was performed by this s
 
 ## Auto Run Result
 
-**Status:** blocked
+**Status:** ready
 
-**Blocking condition:** The working tree contains untracked Epic 5 planning artifacts (`_bmad-output/implementation-artifacts/epic-5-context.md` and this specification), so the Step 1 version-control sanity check requires a halt before implementation.
+**Routing decision:** The status blocker has been cleared so implementation may resume under the Dev Auto routing rules.
+
+**Summary:** After four review/re-derivation cycles, the strict context contracts and bounded deterministic builder foundation are present, but the remaining unchecked execution tasks still require implementation: mandatory CoreApp/AgentLoop orchestration, exact-byte manifest and authority revalidation, durable extension/recovery ownership, real `/context` and `/usage` projections, provider usage reconciliation, and named integration coverage. This status change unblocks work; it does not represent Epic 5 completion.
+
+**Verification baseline:** `cd cli && npm run build` passed; `cd cli && npm test` passed (68 files, 1,809 tests); `git diff --check` passed. These legacy-focused results are a baseline only and do not satisfy the Epic 5 acceptance criteria.
+
+**No commit or push was performed.**
