@@ -1,48 +1,75 @@
 # Continue — thcode BMAD dev-auto loop (Epic 4)
 
-**Paused:** 2026-07-18 ~08:51 (Asia/Bangkok)
+**Updated:** 2026-07-18 ~10:05 (Asia/Bangkok)
 **Branch:** `update/prototype-v1` · GitHub `Temicide/thcode`
 **Product:** `cli/` only. `client/` + `server/` are out of the Release-1 path — do not touch.
 
-## What happened this session
-1. **Pushed 2 previously-local commits** — `origin/update/prototype-v1` is now up to date at `9650d11` (ahead/behind = 0/0):
-   - `9650d11` Story 4.2 — CoreApp /tools catalog coverage + inspect disclosure fix
-   - `d367c84` Fix cross-platform path handling in workspace containment/inspection
-2. **Decided the story order.** User asked to "just do 4-10", but 4-10 is blocked:
-   - **Forward-dependency violation** — 4-10 (T-OCR) needs 4-8, 4-9, 4-14 `done` first; all three are still `ready-for-dev`.
-   - **No spec + no code** — there is no `4-10-*.md`, no `specialists/services/`, no OCR code. From-scratch.
-   - ⟹ Agreed to walk deps first: **4-14 → 4-8 → 4-9**, then open 4-10.
-3. **Started the loop on 4-14, then paused before implementing** (no code written).
+## Status this session — 10 of 20 Epic-4 stories DONE & pushed
 
-## ⚠️ Correction to the prior handoff — 4-14 is NOT "done/audit", it is PARTIAL
-Verified on disk: `cli/src/core/specialists/evidence/` contains **only** `types.ts` + `cacheManifest.ts`.
-**Missing** (per the spec's `## Code Map`):
-- `cli/src/core/specialists/evidence/seal.ts` — `sealSpecialistEvidence(...)`
-- `cli/src/core/specialists/evidence/repository.ts` — `InMemoryEvidenceRepository`
-- `cli/src/core/specialists/evidence/projection.ts` — `projectReusedEvidence` / `projectFreshEvidence`
-- `cli/src/core/specialists/evidence/index.ts` — barrel
-- `cli/src/core/app.ts` — accessors `sealSpecialistEvidence` / `computeSpecialistCacheManifest` / `specialistEvidenceRepository` (+ lazy `_specialistEvidenceRepo`)
-- `cli/test/specialistEvidence.test.ts` — no test file exists yet
+All stories that had specs are now `done`, dual-reviewed (adversarial + edge-case),
+and committed. Build clean; **58 test files / 1602 tests pass** (baseline was 57/1535).
 
-So 4-14 is a **real implement**, not an audit. Treat 4-3..4-9 with the same skepticism — verify file-by-file, don't trust "code exists + tests pass".
+| Story | Status | Commit | Notes |
+|---|---|---|---|
+| 4.1  | done | (prior) | Capability Registry — was already done. |
+| 4.2  | done | 4e06980 | Review was completed in a prior session; flipped to done. |
+| 4.3  | done | ed3b8e4 | 13 review patches (raw error-leak removal, EPIPE-safe I/O, unknown-outcome cleanup). follow-up=true. |
+| 4.4  | done | a62de47 | 8 patches (unhandled-rejection guard, validation, case-insensitive protocol). 3 deferred. |
+| 4.5  | done | 05b3904 | 13 patches (empty-string universal-match misrouting, intentAmbiguity dead-code wiring, secret-key filter). follow-up=true. |
+| 4.6  | done | f72be21 | 9 patches (PDF/DOCX extractedText, permission-denied fail-closed, WebP sniff). 4 deferred. follow-up=true. |
+| 4.7  | done | f368984 | 17 patches (JPEG/WAV/PNG/VP8 parser hardening, +6 tests). |
+| 4.8  | done | 519c30a | 1 bad_spec (newline vs colon digest framing — spec amended) + 5 patches (serviceId cross-validation). 3 deferred. |
+| 4.9  | done | 7626ca8 | 4 patches (non-Error throw handling, integration tests). 3 deferred. |
+| 4.14 | done | 7e2258d + 0fb7bc4 | NEWLY IMPLEMENTED this session: seal/repository/projection/index + app.ts accessors + 42 tests. 4 review patches (no invented ConsentReference/serviceIdentity, structured-sanitization preserves structure, no fabricated request options). follow-up=true. |
 
-## Verified-good state (safe to build on)
-- `cd cli && npm run build` → **tsc clean** (the 2 existing evidence files compile).
-- Dependencies for 4-14 are present: 4.9 types at `cli/src/core/specialists/adapter/types.ts` (`SpecialistResult`, `SpecialistFailure`, `SpecialistFieldValue`); 4.8 `ConsentReference` at `cli/src/core/specialists/consent/types.ts`. `evidence/types.ts` already imports them correctly.
-- Did NOT re-run the full 1537-test suite this session — run it first to confirm baseline before adding work.
+`deferred-work.md` accumulated entries from 4.4/4.6/4.8/4.9 — review before/with the next stories.
 
-## Next action (resume here)
-Run the repo-local skill `.claude/skills/bmad-dev-auto/` (read `step-01` first). For 4-14, status `ready-for-dev` routes straight to **step-03 (implement)**:
-1. In the spec frontmatter set `baseline_revision: 9650d11` and `status: in-progress`.
-2. Hand to a **Sonnet** implementation subagent, **synchronously** (`run_in_background: false` — the skill forbids backgrounded subagents). Build the 6 missing items above per the spec's `## Code Map` / `## Design Notes`. Binding rules: `_bmad-output/project-context.md` (95 rules: `.js` import specifiers, no `any`, `readonly`, deterministic SHA-256 for CacheManifest digest + evidence id, Sanitizer before any derived field, inject clock, cite governing AD in header — AD-10/AD-24).
-3. Verify: `npm run build` clean → `npx vitest run specialistEvidence` pass → `npx vitest run` full green (report new totals vs 57 files / 1537 tests).
-4. step-04: dual-Opus review (`bmad-review-adversarial-general` + `bmad-review-edge-case-hunter`, parallel/blocking), triage findings, commit, flip status `done`.
-5. Then repeat for **4-8**, **4-9** (likely also partial — verify).
+## What remains — 4.10–4.20 (NO specs yet)
 
-Spec file: `_bmad-output/implementation-artifacts/4-14-persist-immutable-specialist-evidence-and-versioned-cachemanifest-identity.md`
+These have no spec files. Each needs BMAD dev-auto **step-02** (spec authoring) before
+step-03/04. Order (per epic-4-context dependencies — all deps are now done):
 
-## Gotchas
-- Windows / PowerShell. Git native stderr shows red `NativeCommandError` that is NOT a failure — check the real result line.
-- Multi-line commit messages via PowerShell here-strings failed once → use `git commit -F <file>`.
-- `_bmad`, `_bmad-output`, `.agents`, `.claude` are gitignored — story specs and BMAD artifacts never get committed (this `continue.md` at repo root does).
-- **Do not push without explicit user confirmation.**
+1. **4.10–4.13** — the four working service integrations (T-OCR, Speech-to-Text, Extract
+   Address, NER). Independent of each other. Depend on 4.8/4.9/4.14 (done ✓) + 4.3 (done ✓).
+   Each registers a `SpecialistServiceHandler` (4.9 contract) with `SharedSpecialistAdapter`,
+   builds the AI-for-Thai transport request, parses the response into `SpecialistResult`
+   fields, and seals `SpecialistEvidence` (4.14). Tests are OFFLINE (fake transport + fixture;
+   no real network/credentials per project rules).
+   - **Key gap:** the repo does NOT contain the concrete AI-for-Thai per-service API contracts
+     (endpoint paths, request body shapes, response field names). `cli/src/core/aiforthai/types.ts`
+     is an old Jul-14 STUB (`stubInvoke`), not the real contract. The 4.10 ACs use a
+     "reviewed T-OCR fixture" — so implement against a **defined, fixture-based contract**
+     (plausible AI-for-Thai request/response shape) and defer real-endpoint confirmation.
+     Decide before starting: fixture-based contract now, or wait for verified AI-for-Thai API docs.
+2. **4.15** — cache reuse/force-fresh/retain/invalidate (depends 4.14 ✓).
+3. **4.16** — failure classification + quarantine smallest-proven-scope (depends 4.9 ✓).
+4. **4.17** — explicit retest + scoped recovery (depends 4.16).
+5. **4.18–4.20** — verification stories (depend on all preceding).
+
+## How to resume
+
+Run the repo-local skill `.claude/skills/bmad-dev-auto/` (read `step-01` first). For each
+remaining story: step-01 routes to **step-02** (no spec yet) → author spec from
+`_bmad-output/planning-artifacts/epics.md` Story 4.N section + epic-4-context + the PRD
+FR/AD/UX-DR refs it cites → step-03 implement (delegate to a synchronous subagent) →
+step-04 dual review (blind adversarial + edge-case subagents, parallel/blocking) →
+triage → commit → flip `done`.
+
+Reusable orchestration prompt for already-specced stories is at `/tmp/orchestrate-story.md`
+(session-temp; recreate if gone). For new specs, follow `step-02` + `.claude/skills/bmad-dev-auto/spec-template.md`.
+
+## Binding rules (carry forward)
+- `_bmad/` and `_bmad-output/` ARE committed by project policy (.gitignore comment + memory);
+  `.claude/` and `.agents/` stay ignored. Spec status flips + triage logs get committed.
+- Synchronous subagents only — never `run_in_background: true` for dev-auto subagents.
+- Reviewers run at session model capability; spawn blind (fresh prompts), parallel/blocking.
+- `.js` import specifiers; no `any`; `readonly`; injected clock; Sanitizer before persisted/displayed
+  fields (AD-24); deterministic SHA-256 for digests/evidence-id; cite governing AD in headers.
+- Do not push without explicit user confirmation (this session: user authorized the end-of-epic push).
+
+## Gotchas (still true)
+- Windows/PowerShell target — but dev was macOS this session. Git native stderr red herring on Windows.
+- Multi-line commit messages: use `git commit -F <file>` (heredoc to /tmp works on macOS too).
+- `final_revision` bookkeeping: I set it to the story's code+spec commit hash and `git commit --amend`
+  so the field rides in the commit it points to (the amend changes the hash slightly — known minor drift,
+  matches the 4.14 convention).
