@@ -15,7 +15,7 @@ import type { CacheManifest, CacheManifestInput } from './types.js';
  * whitespace. This ensures the same logical input always produces the same
  * byte sequence.
  */
-function canonicalJson(value: unknown): string {
+export function canonicalJson(value: unknown): string {
   if (value === null || value === undefined) {
     return 'null';
   }

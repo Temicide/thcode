@@ -227,6 +227,15 @@ import {
   minimizeArtifact,
 } from './specialists/artifacts/index.js';
 import {
+  InMemoryEvidenceRepository,
+  sealSpecialistEvidence as sealEvidence,
+  buildCacheManifest,
+  type EvidenceRepository,
+  type CacheManifest,
+  type CacheManifestInput,
+  type SpecialistEvidence,
+} from './specialists/evidence/index.js';
+import {
   listCheckpoints,
   inspectCheckpoint,
   analyzeRollbackSet,
@@ -337,6 +346,8 @@ export class CoreApp {
   private _specialistArtifactResolver: SpecialistArtifactResolver;
   /** Story 4.9: lazily-initialized shared specialist adapter. */
   private _specialistAdapter: SharedSpecialistAdapter | null = null;
+  /** Story 4.14: lazily-initialized in-memory evidence repository. */
+  private _specialistEvidenceRepo: InMemoryEvidenceRepository | null = null;
 
   constructor(opts: CoreAppOptions = {}) {
     // Fail-closed startup: incompatible protocol major version throws before
@@ -707,6 +718,162 @@ export class CoreApp {
     }
 
     return this._specialistAdapter.invoke(request, entry, healthSnapshot);
+  }
+
+  // --- Story 4.14: Specialist Evidence + CacheManifest ---
+
+  /**
+   * Access the in-memory EvidenceRepository (lazily initialized).
+   * Durable persistence is a later epic; 4.14 ships the port + in-memory store.
+   */
+  specialistEvidenceRepository(): EvidenceRepository {
+    if (!this._specialistEvidenceRepo) {
+      this._specialistEvidenceRepo = new InMemoryEvidenceRepository();
+    }
+    return this._specialistEvidenceRepo;
+  }
+
+  /**
+   * Compute a CacheManifest for a Specialist service invocation. Builds a
+   * CacheManifestInput from the service identity, registry entry, effective
+   * configuration, prepared artifacts, and request options. Returns the
+   * complete CacheManifest with deterministic digest.
+   *
+   * AD-10: CacheManifest identity is a deterministic SHA-256 over all bound
+   * request fields. ANY field difference produces a different digest.
+   */
+  computeSpecialistCacheManifest(
+    serviceId: string,
+    preparedArtifacts: readonly PreparedArtifact[],
+    opts: {
+      readonly effectiveConfigurationId: string;
+      readonly endpoint: string;
+      readonly requestOptions: { readonly timeoutMs: number; readonly maxRetries: number };
+      readonly transformationPolicy: import('./permissions/transferConsent.js').TransformationPolicy;
+      readonly contractVersion?: string;
+      readonly manifestVersion?: number;
+    },
+  ): CacheManifest {
+    const registry = this.capabilityRegistry();
+    let contractVersion = opts.contractVersion;
+    let manifestVersion = opts.manifestVersion;
+
+    // Look up registry entry for contract/manifest versions if not provided.
+    if (contractVersion === undefined || manifestVersion === undefined) {
+      if (registry.ok) {
+        const entry = registry.byId(serviceId);
+        if (entry) {
+          contractVersion = contractVersion ?? entry.contractVersion;
+          manifestVersion = manifestVersion ?? entry.manifestVersion;
+        }
+      }
+    }
+
+    const input: CacheManifestInput = {
+      manifestVersion: manifestVersion ?? 1,
+      serviceId,
+      contractVersion: contractVersion ?? '',
+      verifiedOrigin: opts.endpoint,
+      semanticInputs: preparedArtifacts.map((a) => ({
+        mediaType: a.mediaType,
+        contentHash: a.contentHash,
+      })),
+      requestOptions: opts.requestOptions,
+      preprocessing: [
+        ...new Set(preparedArtifacts.flatMap((a) => a.transformations)),
+      ].sort(),
+      mappingVersion: contractVersion ?? '',
+      schemaVersion: manifestVersion ?? 1,
+      effectiveConfigurationId: opts.effectiveConfigurationId,
+      transformationPolicy: opts.transformationPolicy,
+      sourceIdentity: preparedArtifacts[0]?.sourceIdentity.canonicalPath ?? '',
+    };
+
+    return buildCacheManifest(input);
+  }
+
+  /**
+   * Seal a Specialist outcome into immutable Evidence and store it in the
+   * in-memory EvidenceRepository. For a result, computes the cacheManifestDigest
+   * from the request inputs. For a failure, uses the passed service identity
+   * and consent reference. Returns the frozen SpecialistEvidence.
+   *
+   * AD-10: Evidence is immutable and sealed (Object.freeze). Any change
+   * produces a new Evidence record with a new id.
+   * AD-24: Sanitization runs on any human-readable derived field before it
+   * enters Evidence.
+   */
+  async sealSpecialistEvidence(
+    outcome: import('./specialists/adapter/types.js').SpecialistOutcome,
+    serviceId: string,
+    opts?: {
+      readonly preparedArtifacts?: readonly PreparedArtifact[];
+      readonly effectiveConfigurationId?: string;
+      readonly endpoint?: string;
+      readonly requestOptions?: { readonly timeoutMs: number; readonly maxRetries: number };
+      readonly transformationPolicy?: import('./permissions/transferConsent.js').TransformationPolicy;
+      readonly serviceIdentity?: {
+        readonly serviceId: string;
+        readonly nameThai: string;
+        readonly nameEnglish: string;
+        readonly contractVersion: string;
+        readonly adapterVersion: string;
+      };
+      readonly consentReference?: import('./specialists/consent/types.js').ConsentReference;
+      readonly sourceContentHash?: string;
+      readonly cacheManifestDigest?: string;
+    },
+  ): Promise<SpecialistEvidence> {
+    const now = this.clock();
+
+    // For failure outcomes, consentReference and serviceIdentity are required
+    // (never synthesized — P1/P2 in seal.ts enforce this).
+    if (!outcome.ok) {
+      if (!opts?.consentReference) {
+        throw new Error('sealSpecialistEvidence: consentReference is required to seal a failure outcome.');
+      }
+      if (!opts?.serviceIdentity) {
+        throw new Error('sealSpecialistEvidence: serviceIdentity is required to seal a failure outcome.');
+      }
+    }
+
+    // Compute cacheManifestDigest from request inputs if available.
+    // Only compute when opts.requestOptions is explicitly provided — never
+    // inject defaults that would cause a cache manifest mismatch (Story 4.15).
+    let cacheManifestDigest = opts?.cacheManifestDigest;
+    if (
+      cacheManifestDigest === undefined &&
+      outcome.ok &&
+      opts?.preparedArtifacts &&
+      opts?.effectiveConfigurationId &&
+      opts?.endpoint &&
+      opts?.requestOptions &&
+      opts?.transformationPolicy
+    ) {
+      const manifest = this.computeSpecialistCacheManifest(serviceId, opts.preparedArtifacts, {
+        effectiveConfigurationId: opts.effectiveConfigurationId,
+        endpoint: opts.endpoint,
+        requestOptions: opts.requestOptions,
+        transformationPolicy: opts.transformationPolicy,
+      });
+      cacheManifestDigest = manifest.digest;
+    }
+
+    const evidence = sealEvidence({
+      outcome,
+      configurationGenerationId: outcome.ok
+        ? outcome.configurationGenerationId
+        : outcome.effectiveGenerationId,
+      serviceIdentity: opts?.serviceIdentity,
+      consentReference: opts?.consentReference,
+      sourceContentHash: opts?.sourceContentHash,
+      cacheManifestDigest,
+      observationTime: now,
+      displayTime: now,
+    });
+
+    await this.specialistEvidenceRepository().store(evidence);
+    return evidence;
   }
 
   // --- Story 4.3: AI-for-Thai credential JIT onboarding ---
