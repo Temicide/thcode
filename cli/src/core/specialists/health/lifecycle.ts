@@ -102,6 +102,38 @@ export class SpecialistHealthLifecycle {
   }
 
   /**
+   * Atomically quarantine current, configured generations. Every target is
+   * checked before the first mutation so a stale or unconfigured group member
+   * can never yield a partially quarantined credential group (AD-18).
+   */
+  quarantineMany(
+    targets: readonly { readonly serviceId: string; readonly generationId: string }[],
+    cause: string,
+  ):
+    | { readonly ok: true; readonly snapshots: readonly SpecialistHealthSnapshot[] }
+    | { readonly ok: false; readonly cause: 'unconfigured' | 'stale-generation' } {
+    for (const target of targets) {
+      const snapshot = this.snapshot(target.serviceId);
+      if (snapshot.state === 'unconfigured' || snapshot.generationId === undefined) {
+        return { ok: false, cause: 'unconfigured' };
+      }
+      if (snapshot.generationId !== target.generationId) {
+        return { ok: false, cause: 'stale-generation' };
+      }
+    }
+
+    return {
+      ok: true,
+      snapshots: targets.map((target) => this.quarantine(target.serviceId, cause)),
+    };
+  }
+
+  /** Return the currently registered effective configuration, if any. */
+  configuration(serviceId: string): SpecialistEffectiveConfiguration | undefined {
+    return this.configs.get(serviceId);
+  }
+
+  /**
    * Mark a service as unconfigured. Clears the stored config and probe, and
    * removes the generation from the HealthRegistry.
    */

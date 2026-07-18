@@ -223,6 +223,13 @@ import {
   type SpecialistRequest,
   type SpecialistTransport,
 } from './specialists/adapter/index.js';
+import {
+  classifySpecialistFailure,
+  decideQuarantine,
+  applyQuarantine,
+  projectClassifiedFailure,
+  type ClassifiedSpecialistFailure,
+} from './specialists/classification/index.js';
 import { defaultSpecialistHandlers } from './specialists/services/index.js';
 import {
   SpecialistArtifactResolver,
@@ -464,6 +471,68 @@ export class CoreApp {
    */
   specialistHealthLifecycle(): SpecialistHealthLifecycle {
     return this._specialistHealth;
+  }
+
+  /**
+   * Resolve a shared credential scope only from currently registered effective
+   * configurations. Registry invokability alone is not proof of a shared key;
+   * every launch service must have the same opaque credential binding and a
+   * current generation before a 401 can quarantine the group (AD-18).
+   */
+  private resolveConfiguredCredentialGroup(
+    serviceId: string,
+    credentialReferenceId: string,
+    credentialRevision: string,
+  ):
+    | {
+      readonly id: string;
+      readonly credentialReferenceId: string;
+      readonly credentialRevision: string;
+      readonly members: readonly {
+        readonly serviceId: string;
+        readonly generationId: string;
+        readonly credentialReferenceId: string;
+        readonly credentialRevision: string;
+      }[];
+    }
+    | undefined {
+    const registry = this.capabilityRegistry();
+    if (!registry.ok) return undefined;
+
+    const invokable = registry.invokable();
+    const members = invokable.flatMap((entry) => {
+      const configuration = this._specialistHealth.configuration(entry.id);
+      if (
+        !configuration
+        || configuration.credentialReferenceId !== credentialReferenceId
+        || configuration.credentialRevision !== credentialRevision
+      ) {
+        return [];
+      }
+      return [{
+        serviceId: entry.id,
+        generationId: configuration.id,
+        credentialReferenceId: configuration.credentialReferenceId,
+        credentialRevision: configuration.credentialRevision,
+      }];
+    });
+
+    // A partial set is insufficient evidence: never broaden a service failure
+    // to the credential group unless every reviewed invokable member is current.
+    if (
+      members.length < 2
+      || members.length !== invokable.length
+      || !members.some((member) => member.serviceId === serviceId)
+    ) {
+      return undefined;
+    }
+
+    return {
+      id: AI_FOR_THAI_CREDENTIAL_ID,
+      credentialReferenceId,
+      credentialRevision,
+      members,
+    };
   }
 
   /**
@@ -847,25 +916,61 @@ export class CoreApp {
       },
     );
 
+    // --- Story 4.16: Classify sealed failure and quarantine proven scope ---
+
+    if (!invocation.ok) {
+      const credentialGroup = this.resolveConfiguredCredentialGroup(
+        serviceId,
+        effectiveConfiguration.credentialReferenceId,
+        effectiveConfiguration.credentialRevision,
+      );
+      const classified = classifySpecialistFailure(invocation, {
+        sealedEvidenceRef: evidence.id,
+        credentialGroup,
+      });
+      const decision = decideQuarantine(classified);
+      const quarantineReceipt = applyQuarantine(decision, this._specialistHealth);
+
+      // Quarantine invalidates only the bound cache identity. Historical Evidence
+      // remains immutable; invalidated entries cannot be reused on a later miss.
+      if (quarantineReceipt.applied) {
+        const scope: CacheInvalidationScope = decision.scope.kind === 'credential-group'
+          ? { kind: 'credentialRevision', revision: decision.scope.credentialRevision }
+          : decision.scope.kind === 'service'
+            ? { kind: 'serviceId', serviceId: decision.scope.serviceId }
+            : { kind: 'serviceId', serviceId };
+        this.invalidateSpecialistCache(scope);
+      }
+
+      const classifiedFailure: ClassifiedSpecialistFailure = {
+        ...invocation,
+        // This is the returned envelope only; immutable sealed Evidence retains
+        // the original adapter outcome and is never self-referentially mutated.
+        evidenceRef: evidence.id,
+        classifiedFailure: classified,
+        classifiedProjection: projectClassifiedFailure(classified),
+        quarantineReceipt,
+      };
+      return classifiedFailure;
+    }
+
     // Record in the cache index (only for successful outcomes — a service
     // failure is sealed as Evidence but not cached for reuse).
-    if (invocation.ok) {
-      const result = invocation;
-      this.specialistCacheIndex().record(
-        cacheManifest.digest,
-        evidence.id,
-        {
-          serviceId,
-          effectiveConfigurationId: effectiveConfiguration.id,
-          contractVersion: effectiveConfiguration.contractVersion,
-          credentialRevision: effectiveConfiguration.credentialRevision,
-          sourceContentHash: result.sourceContentHash,
-          endpoint: effectiveConfiguration.endpoint,
-          observationTime: this.clock(),
-          retention: { kind: 'none' },
-        },
-      );
-    }
+    const result = invocation;
+    this.specialistCacheIndex().record(
+      cacheManifest.digest,
+      evidence.id,
+      {
+        serviceId,
+        effectiveConfigurationId: effectiveConfiguration.id,
+        contractVersion: effectiveConfiguration.contractVersion,
+        credentialRevision: effectiveConfiguration.credentialRevision,
+        sourceContentHash: result.sourceContentHash,
+        endpoint: effectiveConfiguration.endpoint,
+        observationTime: this.clock(),
+        retention: { kind: 'none' },
+      },
+    );
 
     return invocation;
   }
