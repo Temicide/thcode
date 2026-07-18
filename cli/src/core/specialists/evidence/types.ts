@@ -226,3 +226,21 @@ export interface FreshEvidenceProjection {
   };
   readonly completeness: EvidenceCompleteness;
 }
+
+// ---------------------------------------------------------------------------
+// Cache hit result (Story 4.15)
+// ---------------------------------------------------------------------------
+
+/**
+ * Result of a cache hit in invokeSpecialist. Returned when a valid, non-expired,
+ * non-invalidated cache entry is found and forceFresh is false. The Evidence
+ * is the SAME immutable frozen record from the EvidenceRepository, relabeled
+ * via projectReusedEvidence — NEVER re-sealed, NEVER mutated, NEVER presented
+ * as fresh.
+ */
+export interface SpecialistCacheHit {
+  readonly ok: true;
+  readonly reused: true;
+  readonly projection: ReusedEvidenceProjection;
+  readonly evidence: SpecialistEvidence;
+}

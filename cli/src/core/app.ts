@@ -234,10 +234,18 @@ import {
   InMemoryEvidenceRepository,
   sealSpecialistEvidence as sealEvidence,
   buildCacheManifest,
+  CacheIndex,
+  InMemoryCacheInvalidationPort,
+  resolveCacheHit,
+  projectReusedEvidence,
   type EvidenceRepository,
   type CacheManifest,
   type CacheManifestInput,
   type SpecialistEvidence,
+  type SpecialistCacheHit,
+  type CacheInvalidationScope,
+  type InvalidationReceipt,
+  type CacheInvalidationPort,
 } from './specialists/evidence/index.js';
 import {
   listCheckpoints,
@@ -354,6 +362,10 @@ export class CoreApp {
   private _specialistTransport: SpecialistTransport | null = null;
   /** Story 4.14: lazily-initialized in-memory evidence repository. */
   private _specialistEvidenceRepo: InMemoryEvidenceRepository | null = null;
+  /** Story 4.15: lazily-initialized in-memory cache index. */
+  private _specialistCacheIndex: CacheIndex | null = null;
+  /** Story 4.15: lazily-initialized cache invalidation port. */
+  private _specialistCacheInvalidationPort: InMemoryCacheInvalidationPort | null = null;
 
   constructor(opts: CoreAppOptions = {}) {
     // Fail-closed startup: incompatible protocol major version throws before
@@ -641,7 +653,14 @@ export class CoreApp {
    * artifacts, prepared manifest, and consent reference. Constructs the
    * SharedSpecialistAdapter (lazily) with FetchSpecialistTransport, the
    * injected clock, and a resolveRawKey closure wired to credentials
-   * persistence. Returns the typed SpecialistInvocation — NEVER throws.
+   * persistence. Returns the typed SpecialistInvocation or a SpecialistCacheHit
+   * when a valid cache entry is found — NEVER throws.
+   *
+   * Cache flow (Story 4.15):
+   *   compute CacheManifest → resolveCacheHit (cache) →
+   *   [on reused: return projectReusedEvidence, STOP, no transfer] →
+   *   health gate (force-fresh requires available) →
+   *   adapter dispatch → sealSpecialistEvidence → cacheIndex.record
    *
    * No remote call if validation refuses (fail-closed before transport).
    */
@@ -651,8 +670,8 @@ export class CoreApp {
     preparedManifest: PreparedPayloadManifest,
     consentReference: ConsentReference,
     operationId: string,
-    opts?: Partial<SpecialistRequestOptions>,
-  ): Promise<SpecialistInvocation> {
+    opts?: Partial<SpecialistRequestOptions> & { readonly forceFresh?: boolean },
+  ): Promise<SpecialistInvocation | SpecialistCacheHit> {
     // Build the effective configuration.
     const configResult = await this.buildSpecialistConfiguration(serviceId);
     if (!configResult.ok) {
@@ -700,6 +719,68 @@ export class CoreApp {
       };
     }
 
+    // --- Story 4.15: Cache lookup (BEFORE health gate + adapter dispatch) ---
+
+    const forceFresh = opts?.forceFresh ?? false;
+    const requestOptions = {
+      timeoutMs: opts?.timeoutMs ?? effectiveConfiguration.requestConfig.timeoutMs,
+      maxRetries: opts?.maxRetries ?? effectiveConfiguration.requestConfig.maxRetries,
+    };
+
+    // Compute the CacheManifest from request inputs (before dispatch).
+    const cacheManifest = this.computeSpecialistCacheManifest(serviceId, preparedArtifacts, {
+      effectiveConfigurationId: effectiveConfiguration.id,
+      endpoint: effectiveConfiguration.endpoint,
+      requestOptions,
+      transformationPolicy: preparedManifest.transformation,
+      contractVersion: effectiveConfiguration.contractVersion,
+      manifestVersion: effectiveConfiguration.manifestVersion,
+    });
+
+    // Resolve cache hit (lookup BEFORE health gating).
+    const cacheResult = await resolveCacheHit({
+      index: this.specialistCacheIndex(),
+      repo: this.specialistEvidenceRepository(),
+      manifest: cacheManifest,
+      forceFresh,
+      now: this.clock(),
+      healthState: healthSnapshot.state,
+    });
+
+    if (cacheResult.ok && cacheResult.kind === 'reused') {
+      // Cache hit — return the reused Evidence (no transfer).
+      // The Evidence is the SAME immutable frozen record from the repository,
+      // relabeled via projectReusedEvidence. NEVER re-sealed, NEVER mutated.
+      return {
+        ok: true,
+        reused: true,
+        projection: projectReusedEvidence(cacheResult.evidence),
+        evidence: cacheResult.evidence,
+      };
+    }
+
+    if (!cacheResult.ok) {
+      // Cache lookup failed (expired, corrupt, or unavailable on force-fresh).
+      // Return a typed failure projection. For expired/corrupt, the caller
+      // should handle the typed cause. For unavailable on force-fresh, return
+      // a refusal-like result.
+      if (cacheResult.cause === 'unavailable') {
+        return {
+          ok: false,
+          refused: true,
+          cause: 'stale-generation' as const,
+          safeMessage: `Service "${serviceId}" is not available for a force-fresh request.`,
+          operationId,
+          serviceId,
+        };
+      }
+      // For expired or corrupt, proceed to live dispatch (the adapter will
+      // handle health gating). These are treated as a miss.
+      // Fall through to the adapter dispatch path.
+    }
+
+    // --- Cache miss or force-fresh: proceed to health gate + adapter dispatch ---
+
     // Build the SpecialistRequest.
     const request: SpecialistRequest = {
       serviceId,
@@ -710,10 +791,7 @@ export class CoreApp {
       consentReference,
       operationId,
       preparedArtifacts,
-      options: {
-        timeoutMs: opts?.timeoutMs ?? effectiveConfiguration.requestConfig.timeoutMs,
-        maxRetries: opts?.maxRetries ?? effectiveConfiguration.requestConfig.maxRetries,
-      },
+      options: requestOptions,
       startedAt: this.clock(),
     };
 
@@ -733,7 +811,63 @@ export class CoreApp {
       });
     }
 
-    return this._specialistAdapter.invoke(request, entry, healthSnapshot);
+    const invocation = await this._specialistAdapter.invoke(request, entry, healthSnapshot);
+
+    // A SpecialistAdapterRefusal (handler-not-registered / stale-generation /
+    // unsupported-input / consent-manifest-mismatch) is a routing/health/consent
+    // refusal, NOT a service failure. The 4.14 Evidence contract wraps
+    // SpecialistResult | SpecialistFailure — not refusals — so a refusal is
+    // returned as-is without sealing (and never recorded in the cache index).
+    if ('refused' in invocation) {
+      return invocation;
+    }
+
+    // --- Seal Evidence and record in cache index ---
+
+    // Seal the outcome into immutable Evidence (invocation is now a
+    // SpecialistOutcome: a result or a service failure).
+    const evidence = await this.sealSpecialistEvidence(
+      invocation,
+      serviceId,
+      {
+        preparedArtifacts,
+        effectiveConfigurationId: effectiveConfiguration.id,
+        endpoint: effectiveConfiguration.endpoint,
+        requestOptions,
+        transformationPolicy: preparedManifest.transformation,
+        serviceIdentity: {
+          serviceId,
+          nameThai: entry.nameThai,
+          nameEnglish: entry.nameEnglish,
+          contractVersion: effectiveConfiguration.contractVersion,
+          adapterVersion: effectiveConfiguration.adapterVersion,
+        },
+        consentReference,
+        cacheManifestDigest: cacheManifest.digest,
+      },
+    );
+
+    // Record in the cache index (only for successful outcomes — a service
+    // failure is sealed as Evidence but not cached for reuse).
+    if (invocation.ok) {
+      const result = invocation;
+      this.specialistCacheIndex().record(
+        cacheManifest.digest,
+        evidence.id,
+        {
+          serviceId,
+          effectiveConfigurationId: effectiveConfiguration.id,
+          contractVersion: effectiveConfiguration.contractVersion,
+          credentialRevision: effectiveConfiguration.credentialRevision,
+          sourceContentHash: result.sourceContentHash,
+          endpoint: effectiveConfiguration.endpoint,
+          observationTime: this.clock(),
+          retention: { kind: 'none' },
+        },
+      );
+    }
+
+    return invocation;
   }
 
   /**
@@ -901,6 +1035,49 @@ export class CoreApp {
 
     await this.specialistEvidenceRepository().store(evidence);
     return evidence;
+  }
+
+  // --- Story 4.15: Specialist cache index, invalidation, and port ---
+
+  /**
+   * Access the in-memory CacheIndex (lazily initialized).
+   * The cache index maps cacheManifestDigest → CacheIndexEntry for reuse
+   * lookup. Entries are NEVER deleted — only marked expired or invalidated.
+   */
+  specialistCacheIndex(): CacheIndex {
+    if (!this._specialistCacheIndex) {
+      this._specialistCacheIndex = new CacheIndex();
+    }
+    return this._specialistCacheIndex;
+  }
+
+  /**
+   * Invalidate the specialist cache for a given scope. Returns an
+   * InvalidationReceipt with the affected digests. Does NOT delete any
+   * Evidence record — deletion is out of this epic.
+   */
+  invalidateSpecialistCache(scope: CacheInvalidationScope): InvalidationReceipt {
+    const index = this.specialistCacheIndex();
+    const affectedDigests = index.invalidate(scope);
+    return {
+      scope,
+      affectedCount: affectedDigests.length,
+      affectedDigests,
+    };
+  }
+
+  /**
+   * Access the CacheInvalidationPort (lazily initialized). Wraps the
+   * CacheIndex. Exposes stable reference behavior without claiming deletion
+   * has occurred (AC #5).
+   */
+  specialistCacheInvalidationPort(): CacheInvalidationPort {
+    if (!this._specialistCacheInvalidationPort) {
+      this._specialistCacheInvalidationPort = new InMemoryCacheInvalidationPort(
+        this.specialistCacheIndex(),
+      );
+    }
+    return this._specialistCacheInvalidationPort;
   }
 
   // --- Story 4.3: AI-for-Thai credential JIT onboarding ---
