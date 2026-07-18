@@ -2,8 +2,9 @@
 title: 'Story 4.2: Browse, search, inspect, and honestly disable catalog entries'
 type: 'feature'
 created: '2026-07-17'
-status: 'in-review'
+status: 'done'
 baseline_revision: 'd367c84'
+final_revision: '9650d11'
 review_loop_iteration: 0
 followup_review_recommended: false
 context:
