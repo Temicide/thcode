@@ -120,8 +120,9 @@ export class SharedSpecialistAdapter {
       // Catch-all: wrap any unexpected error as unknown-outcome failure.
       // NEVER retry an unknown outcome. Sanitize the message so a thrown error
       // cannot leak the raw key, a stack trace, or a secret path into Evidence.
+      const errorMessage = error instanceof Error ? error.message : String(error);
       const raw = sanitizer.sanitize(
-        `Unexpected error during Specialist invocation: ${(error as Error).message}`,
+        `Unexpected error during Specialist invocation: ${errorMessage}`,
         'error-message',
       );
       const safeMessage = raw.ok ? raw.value : 'Unexpected error during Specialist invocation.';

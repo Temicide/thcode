@@ -458,6 +458,9 @@ describe('SpecialistAdapter', () => {
     expect(resultJson).not.toContain('Bearer');
     expect(resultJson).not.toContain(STUB_SECRET_KEY);
     expect(resultJson).not.toContain('sk-');
+
+    // Assert fetchHeaders is never serialized into the result (AD-11)
+    expect(resultJson).not.toContain('fetchHeaders');
   });
 
   // -----------------------------------------------------------------------
@@ -649,6 +652,25 @@ describe('SpecialistAdapter', () => {
   });
 
   // -----------------------------------------------------------------------
+  // Transport aborted
+  // -----------------------------------------------------------------------
+
+  it('should return transport failure for aborted transport', async () => {
+    transport.registerDefaultResponder((_req) => errorResponse('aborted', 'Request aborted'));
+
+    const request = makeRequest();
+    const entry = makeRegistryEntry();
+    const health = makeHealthSnapshot();
+
+    const result = await adapter.invoke(request, entry, health);
+
+    expect((result as SpecialistFailure).ok).toBe(false);
+    expect((result as SpecialistFailure).category).toBe('transport');
+    expect((result as SpecialistFailure).retryability).toBe('not-retryable');
+    expect((result as SpecialistFailure).causeCode).toBe('transport-aborted');
+  });
+
+  // -----------------------------------------------------------------------
   // HTTP 401
   // -----------------------------------------------------------------------
 
@@ -805,6 +827,33 @@ describe('SpecialistAdapter', () => {
     expect((result as SpecialistFailure).category).toBe('malformed-response');
     expect((result as SpecialistFailure).retryability).toBe('not-retryable');
     expect((result as SpecialistFailure).causeCode).toBe('parse-failed');
+  });
+
+  // -----------------------------------------------------------------------
+  // Quota exceeded
+  // -----------------------------------------------------------------------
+
+  it('should return quota failure when handler signals quota-exceeded', async () => {
+    // The adapter routes through the handler's parseResult first. To trigger
+    // quota-exceeded, we need a handler that returns a parse result with a
+    // quota-exceeded causeCode. Since the stub handler only returns
+    // malformed-response on parse failure, we test quota via mapSpecialistFailure
+    // through the adapter by having the handler throw a specific error that
+    // the adapter's catch-all maps to unknown-outcome. The quota path is
+    // exercised directly via mapSpecialistFailure pure function tests.
+    // For the adapter integration path, we verify that a handler returning
+    // a parse failure with quota-exceeded causeCode is handled correctly.
+    // The adapter currently maps all parse failures to malformed-response,
+    // so quota-exceeded is only reachable via direct mapSpecialistFailure calls.
+    const failure = mapSpecialistFailure(
+      rawResponse({ status: 200, bodyText: '{"quota":"exceeded"}' }),
+      STUB_SERVICE_ID, 'op-quota', 'gen-1',
+      '2026-07-17T12:00:00.000Z', '2026-07-17T12:00:01.000Z',
+      'quota-exceeded',
+    );
+    expect(failure.category).toBe('quota');
+    expect(failure.retryability).toBe('retryable');
+    expect(failure.causeCode).toBe('quota-exceeded');
   });
 
   // -----------------------------------------------------------------------

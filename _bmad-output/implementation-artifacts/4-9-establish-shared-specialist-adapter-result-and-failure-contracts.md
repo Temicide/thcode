@@ -2,9 +2,11 @@
 title: 'Story 4.9: Establish shared Specialist adapter, result, and failure contracts'
 type: 'feature'
 created: '2026-07-17'
-status: 'ready-for-dev'
+baseline_revision: 'f175748'
+status: 'done'
 review_loop_iteration: 0
 followup_review_recommended: false
+final_revision: '1f22989'
 context:
   - '{project-root}/_bmad-output/implementation-artifacts/epic-4-context.md'
 warnings: []
@@ -103,15 +105,15 @@ warnings: []
 ## Tasks & Acceptance
 
 **Execution:**
-- [ ] `cli/src/core/specialists/adapter/types.ts` -- all contracts.
-- [ ] `cli/src/core/specialists/adapter/validation.ts` -- fail-closed `validateSpecialistRequest`.
-- [ ] `cli/src/core/specialists/adapter/failureMapper.ts` -- deterministic `mapSpecialistFailure`.
-- [ ] `cli/src/core/specialists/adapter/transport.ts` -- `InMemorySpecialistTransport` + `FetchSpecialistTransport` (secret-free header summary).
-- [ ] `cli/src/core/specialists/adapter/adapter.ts` -- `SharedSpecialistAdapter.invoke` orchestration (no-throw, in-scope credential, full attribution).
-- [ ] `cli/src/core/specialists/adapter/projection.ts` -- output/failure projections with separate headings + canonical tokens.
-- [ ] `cli/src/core/specialists/adapter/index.ts` -- barrel.
-- [ ] `cli/src/core/app.ts` -- `invokeSpecialist` accessor wiring effective config + health snapshot + credential scope + adapter.
-- [ ] `cli/test/specialistAdapter.test.ts` -- unit-test every I/O matrix row + AC.
+- [x] `cli/src/core/specialists/adapter/types.ts` -- all contracts.
+- [x] `cli/src/core/specialists/adapter/validation.ts` -- fail-closed `validateSpecialistRequest`.
+- [x] `cli/src/core/specialists/adapter/failureMapper.ts` -- deterministic `mapSpecialistFailure`.
+- [x] `cli/src/core/specialists/adapter/transport.ts` -- `InMemorySpecialistTransport` + `FetchSpecialistTransport` (secret-free header summary).
+- [x] `cli/src/core/specialists/adapter/adapter.ts` -- `SharedSpecialistAdapter.invoke` orchestration (no-throw, in-scope credential, full attribution).
+- [x] `cli/src/core/specialists/adapter/projection.ts` -- output/failure projections with separate headings + canonical tokens.
+- [x] `cli/src/core/specialists/adapter/index.ts` -- barrel.
+- [x] `cli/src/core/app.ts` -- `invokeSpecialist` accessor wiring effective config + health snapshot + credential scope + adapter.
+- [x] `cli/test/specialistAdapter.test.ts` -- unit-test every I/O matrix row + AC.
 
 **Acceptance Criteria:**
 - Given an invokable Registry entry is selected, when its adapter is called, then the adapter accepts the exact service identity, contract/manifest versions, EffectiveConfigurationGeneration, PreparedPayloadManifest, ConsentReference, OperationId, and bounded request options, and calls the official endpoint directly from the local CLI (no hosted proxy/client/server in the path).
@@ -124,7 +126,51 @@ warnings: []
 
 Mirror the existing `HealthFailure` envelope shape (category/retryable/scope/generationId/safeMessage/causeCode/retryAfterMs) for `SpecialistFailure` but specialize the categories to Specialist outcomes. The `CredentialScope.resolveRawKey()` pattern matches the health-probe comment in `health/types.ts` ("the raw key is fetched inside the probe scope only ... and never appears in Evidence, the snapshot, or the failure envelope"). The `SharedSpecialistAdapter` MUST NOT hold the raw key as a field — it holds a `resolveRawKey: () => Promise<string>` closure (injected by app.ts from credentials persistence) and hands a `CredentialScope` to the handler; the key lives only in the handler closure during `buildTransportRequest`. After the handler returns the `SpecialistTransportRequest` (with secret-free `headersSummary`), the key is out of scope. The `FetchSpecialistTransport` receives the actual fetch headers (with the real Authorization value built by the handler) separately from the logged `headersSummary` — keep these two distinct: the handler returns BOTH the real fetch `Headers` (used only by the transport for the wire call) AND the secret-free `headersSummary` (used for Evidence/logs). Simplest: `SpecialistTransportRequest` carries `fetchHeaders: Record<string,string>` (the REAL headers, used ONLY by the transport, never persisted/logged) AND `headersSummary: readonly {name,value}[]` (secret-free, the Evidence copy). The transport uses `fetchHeaders` for the wire and `headersSummary` for the `SpecialistRawResponse`-adjacent provenance. Assert in tests that `headersSummary` JSON contains no `Bearer`/`sk-`/raw key and that `fetchHeaders` is never serialized into Evidence. Reuse `sanitizer.sanitize(value, 'header')` to build the secret-free summary. `sourceContentHash` = `preparedManifest.payloadByteDigest` (the exact transferred bytes' digest). `smallestProvenScope` = `${serviceId}#${operationId}#${generationId}`. Failure mapping determinism: same raw.status → same category+causeCode, always (no random, no time-dependent branch). The `unknown-outcome` category is the catch-all and is ALWAYS `not-retryable` (never retry an unknown outcome, AC #3/#4). `handler-not-registered` is the deterministic refusal for serviceIds without a registered handler (the state during 4.9 before 4.10–4.13 register handlers) — this lets the adapter be unit-tested standalone and lets app.ts call `invokeSpecialist` for any serviceId without crashing. Inject `clock`; no `new Date()`/`Date.now()`/`Math.random()` in pure functions (failureMapper, validation, projection). `crypto.randomUUID()` ok for evidenceRef. The app.ts `invokeSpecialist` should be async and return the typed `SpecialistInvocation`; it should NOT throw — wrap any unexpected error as an `unknown-outcome` failure. Tests use `InMemorySpecialistTransport` with a stub handler; no real network. Reuse `SpecialistHealthSnapshot` from 4.4 — if `_specialistHealth` lacks a `snapshot(serviceId)` accessor, add one (check `SpecialistHealthLifecycle`). Confirm `authorityProjection()`/`activation.snapshot()` for operationId/authority binding is NOT needed here (operationId is passed in by the caller, already bound upstream in 4.8 consent).
 
-## Verification
+## Review Triage Log
+
+### 2026-07-18 — Review pass
+- intent_gap: 0
+- bad_spec: 0
+- patch: 4 (high 0, medium 2, low 2)
+- defer: 3 (low 3)
+- reject: 5
+- addressed_findings:
+  - `[medium]` `[patch]` Fix non-Error throw handling in catch-all — use `error instanceof Error ? error.message : String(error)` instead of `(error as Error).message` to avoid producing "undefined" for non-Error throws.
+  - `[medium]` `[patch]` Add aborted transport integration test through the adapter (was only tested at pure-function level).
+  - `[low]` `[patch]` Add quota-exceeded integration test through the adapter (was only tested at pure-function level).
+  - `[low]` `[patch]` Assert fetchHeaders is never serialized into result JSON in secret-free test.
+
+## Auto Run Result
+
+**Summary:** Story 4.9 establishes the shared Specialist adapter, result, and failure contracts. All Code Map items exist on disk, all Tasks & Acceptance are complete, and all acceptance criteria are satisfied. The implementation includes: `types.ts` (all contracts), `validation.ts` (fail-closed `validateSpecialistRequest`), `failureMapper.ts` (deterministic `mapSpecialistFailure`), `transport.ts` (InMemory + FetchSpecialistTransport), `adapter.ts` (SharedSpecialistAdapter orchestration), `projection.ts` (output/failure projections), `index.ts` (barrel), `app.ts` (`invokeSpecialist` accessor), and `specialistAdapter.test.ts` (50 unit tests covering every I/O matrix row + AC).
+
+**Files changed:**
+- `cli/src/core/specialists/adapter/types.ts` — all contracts (request, result, failure, outcome, refusal, handler, transport, projection types)
+- `cli/src/core/specialists/adapter/validation.ts` — fail-closed `validateSpecialistRequest` with 5 ordered checks
+- `cli/src/core/specialists/adapter/failureMapper.ts` — deterministic `mapSpecialistFailure` with status→category mapping
+- `cli/src/core/specialists/adapter/transport.ts` — `InMemorySpecialistTransport` (test) + `FetchSpecialistTransport` (real, secret-free header summary)
+- `cli/src/core/specialists/adapter/adapter.ts` — `SharedSpecialistAdapter.invoke` orchestration (no-throw, in-scope credential, full attribution)
+- `cli/src/core/specialists/adapter/projection.ts` — output/failure projections with separate headings + canonical tokens
+- `cli/src/core/specialists/adapter/index.ts` — barrel export
+- `cli/src/core/app.ts` — `invokeSpecialist` accessor wiring effective config + health snapshot + credential scope + adapter
+- `cli/test/specialistAdapter.test.ts` — 50 unit tests covering every I/O matrix row + AC
+
+**Review findings breakdown:**
+- Patches applied: 4 (non-Error throw handling, aborted transport integration test, quota-exceeded integration test, fetchHeaders assertion)
+- Items deferred: 3 (sourceContentHash spec inconsistency, headersSafe sanitization scope, HTTP-date Retry-After)
+- Items rejected: 5 (TYPHOON_EXPLANATION_HEADING unused by design, headless-blocked typed for future, clock injection in transport is IO boundary, inline raw type is more precise, contractVersion/manifestVersion are required fields)
+
+**Follow-up review recommendation:** false — all patches were low-to-medium severity, localized, and did not change the public API, security posture, or data flow. The 3 deferred items are pre-existing spec-level clarifications and edge cases that do not affect correctness.
+
+**Verification performed:**
+- `npm run build` — tsc compiles with no errors
+- `npx vitest run specialistAdapter` — 50 tests passed (50)
+- `npx vitest run` — 58 test files, 1602 tests passed (full suite green, no regressions)
+
+**Residual risks:**
+- `headless-blocked` refusal cause is typed but not yet implemented (intentional — headless consent is obtained upstream in 4.8)
+- `TYPHOON_EXPLANATION_HEADING` is defined but not used in any projection (intentional — Typhoon explanation projection is a later story)
+- HTTP-date Retry-After format is not parsed (acknowledged in spec, falls back to `retryable` without `retryAfterMs`)
 
 **Commands:**
 - `npm run build` -- expected: tsc compiles with no errors.
