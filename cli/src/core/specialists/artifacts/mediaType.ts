@@ -129,7 +129,9 @@ const MAGIC_SIGNATURES: readonly MagicSignature[] = [
   { offset: 0, bytes: [0x4d, 0x4d, 0x00, 0x2a], mediaType: 'image/tiff' },
   // Office ZIP (docx/xlsx/pptx): 50 4B 03 04
   { offset: 0, bytes: [0x50, 0x4b, 0x03, 0x04], mediaType: 'application/zip' },
-  // WebP: RIFF .... WEBP
+  // WebP: RIFF .... WEBP (must verify both RIFF at 0 and WEBP at 8 to
+  // avoid false positives with other RIFF containers like WAV/AVI).
+  // Handled as a special case in detectMediaType below.
   { offset: 0, bytes: [0x52, 0x49, 0x46, 0x46], mediaType: 'image/webp' },
 ];
 
@@ -161,6 +163,17 @@ export function detectMediaType(path: string, bytes?: Uint8Array): string {
         }
       }
       if (match) {
+        // WebP special case: verify WEBP marker at offset 8 to avoid
+        // false positives with other RIFF containers (WAV, AVI).
+        if (sig.mediaType === 'image/webp') {
+          if (bytes.length >= 12 &&
+              bytes[8] === 0x57 && bytes[9] === 0x45 &&
+              bytes[10] === 0x42 && bytes[11] === 0x50) {
+            return 'image/webp';
+          }
+          // RIFF without WEBP → not WebP, continue sniffing.
+          continue;
+        }
         return sig.mediaType;
       }
     }

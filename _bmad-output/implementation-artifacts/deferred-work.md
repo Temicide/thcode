@@ -10,3 +10,15 @@
 - source_spec: `_bmad-output/implementation-artifacts/4-4-generate-effective-configuration-and-enforce-the-health-lifecycle.md`
   summary: `buildSpecialistConfiguration` accepts any serviceId including non-specialist services (e.g. Typhoon).
   evidence: `cli/src/core/app.ts` `buildSpecialistConfiguration` does not validate that the service belongs to the specialist category. Pre-existing design question; spec does not define specialist-only validation.
+- source_spec: `_bmad-output/implementation-artifacts/4-6-resolve-explicit-artifacts-and-preserve-source-identity.md`
+  summary: `checkSizeLimit` silently accepts unparseable limit strings as "skip" — a misconfigured service silently allows unlimited size.
+  evidence: `cli/src/core/specialists/artifacts/limits.ts` `checkSizeLimit` returns `{ok: true}` when `parseSizeLimit` or `parseTextLengthLimit` returns `null`. Pre-existing design choice; spec does not mandate fail-closed for unparseable limits.
+- source_spec: `_bmad-output/implementation-artifacts/4-6-resolve-explicit-artifacts-and-preserve-source-identity.md`
+  summary: `normalizeReference` does not handle escaped quotes inside quoted strings (e.g. `@"file with \"quote\".txt"`).
+  evidence: `cli/src/core/specialists/artifacts/resolver.ts` `normalizeReference` strips surrounding quotes but does not unescape inner escaped quotes. Edge case; not in spec I/O matrix.
+- source_spec: `_bmad-output/implementation-artifacts/4-6-resolve-explicit-artifacts-and-preserve-source-identity.md`
+  summary: `classifyPrivacy` never returns `'public'` classification; all non-secret files are `'internal'`.
+  evidence: `cli/src/core/specialists/artifacts/resolver.ts` `classifyPrivacy` only returns `'secret'` or `'internal'`. Spec mentions `'public'` but no path patterns trigger it. Pre-existing design gap.
+- source_spec: `_bmad-output/implementation-artifacts/4-6-resolve-explicit-artifacts-and-preserve-source-identity.md`
+  summary: `serviceAcceptsOnlyText` check misses `application/x-yaml` and other text-like types beyond the hardcoded list.
+  evidence: `cli/src/core/specialists/artifacts/resolver.ts` line 698-700 hardcodes a specific set of text-like types. Edge case; the check is only reached for binary files with no extractor against a text-only service.

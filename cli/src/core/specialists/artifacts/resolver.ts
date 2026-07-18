@@ -33,8 +33,7 @@ import type { CapabilityRegistryEntry } from '../registry/types.js';
 // --- Privacy classification helpers ---
 
 const SECRET_PATTERNS: readonly RegExp[] = [
-  /(?:^|\/)\.[^/]*\.env(?:$|\/)/,       // .env, .env.local, .env.production
-  /(?:^|\/)\.env[^/]*$/,                  // .env* at any level
+  /(?:^|\/)\.env[^/]*$/,                  // .env, .env.local, .env.production at any level
   /\.key$/i,                              // *.key
   /\.pem$/i,                              // *.pem
   /(?:^|\/)secrets\//,                    // **/secrets/**
@@ -133,7 +132,9 @@ export class SpecialistArtifactResolver implements ArtifactResolver {
         }
         statResult = { size: s.size, isFile: true };
       } catch {
-        return { ok: false, cause: 'not-found', detail: `File not found: ${canonicalPath}` };
+        // Cannot distinguish ENOENT from EACCES with the current FsProbe
+        // interface; conservatively report unreadable (fail-closed).
+        return { ok: false, cause: 'unreadable', detail: `Cannot stat file: ${canonicalPath}` };
       }
     }
 
@@ -155,8 +156,10 @@ export class SpecialistArtifactResolver implements ArtifactResolver {
     const mediaType = detectMediaType(canonicalPath, bytes);
 
     // If unknown/octet-stream and no target match, fail closed.
-    if (mediaType === 'application/octet-stream') {
-      if (!targetEntry || !targetEntry.supportedInputs.includes(mediaType)) {
+    // When no target service is supplied, unknown types pass through with
+    // unverified compatibility (spec: "no target → unverified").
+    if (mediaType === 'application/octet-stream' && targetEntry) {
+      if (!targetEntry.supportedInputs.includes(mediaType)) {
         return { ok: false, cause: 'unsupported-type', detail: `Unknown media type for: ${canonicalPath}` };
       }
     }
@@ -181,7 +184,14 @@ export class SpecialistArtifactResolver implements ArtifactResolver {
         return { ok: false, cause: 'extraction-unavailable', detail: `Text extraction unavailable for: ${canonicalPath}` };
       }
       text = result.text;
-      transformations.push('utf8-decode');
+      // Distinguish native UTF-8 decode from plugin-based extraction.
+      if (isTextLike(mediaType)) {
+        transformations.push('utf8-decode');
+      } else {
+        // Non-native extractor (e.g. PDF/DOCX plugin).
+        extractedText = result.text;
+        transformations.push('local-text-extraction');
+      }
       contentKind = 'text';
       contentForHash = text;
     } else if (isTextLike(mediaType)) {
@@ -269,10 +279,15 @@ export class SpecialistArtifactResolver implements ArtifactResolver {
       blockedReason: null,
     };
 
-    const sourceIdentity: ResourceIdentity = resolveResource(wsIdentity, candidate, {
-      fsProbe: this.fsProbe,
-      computeDigest: true,
-    });
+    let sourceIdentity: ResourceIdentity;
+    try {
+      sourceIdentity = resolveResource(wsIdentity, candidate, {
+        fsProbe: this.fsProbe,
+        computeDigest: true,
+      });
+    } catch (e) {
+      return { ok: false, cause: 'unreadable', detail: `Failed to resolve resource identity: ${(e as Error).message}` };
+    }
 
     // Step 12: Build immutable PreparedArtifact.
     const referenceInfo: ArtifactReference = {
@@ -345,6 +360,11 @@ function normalizeReference(reference: string): string {
   // Strip surrounding quotes (@"..." or "...").
   if ((s.startsWith('"') && s.endsWith('"')) || (s.startsWith("'") && s.endsWith("'"))) {
     s = s.slice(1, -1);
+  }
+
+  // Empty reference after normalization.
+  if (s.length === 0) {
+    return s;
   }
 
   return s;

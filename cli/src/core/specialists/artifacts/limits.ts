@@ -33,7 +33,9 @@ export function parseSizeLimit(value: string): number | null {
   const multiplier = UNIT_MULTIPLIERS[unit];
   if (multiplier === undefined) return null;
 
-  return Math.round(num * multiplier);
+  const result = Math.round(num * multiplier);
+  if (!isFinite(result)) return null;
+  return result;
 }
 
 /**

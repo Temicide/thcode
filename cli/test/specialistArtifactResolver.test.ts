@@ -270,19 +270,19 @@ describe('SpecialistArtifactResolver.resolveArtifact', () => {
 
   // --- Missing file ---
 
-  it('returns not-found for a missing file', async () => {
+  it('returns unreadable for a missing file (FsProbe cannot distinguish ENOENT from EACCES)', async () => {
     const fs = createFakeFsProbe({});
     const resolver = new SpecialistArtifactResolver({ fsProbe: fs, clock: fixedClock });
     const result = await resolver.resolveArtifact('@nonexistent.txt', WORKSPACE_ROOT, TEXT_SERVICE);
 
     expect(result.ok).toBe(false);
     if (result.ok) return;
-    expect(result.cause).toBe('not-found');
+    expect(result.cause).toBe('unreadable');
   });
 
   // --- Unreadable file (stat throws) ---
 
-  it('returns not-found when stat throws (permissions)', async () => {
+  it('returns unreadable when stat throws (permissions)', async () => {
     const fs = createFakeFsProbe({
       '/workspace/secret.txt': makeFileEntry('data'),
     });
@@ -294,7 +294,7 @@ describe('SpecialistArtifactResolver.resolveArtifact', () => {
 
     expect(result.ok).toBe(false);
     if (result.ok) return;
-    expect(result.cause).toBe('not-found');
+    expect(result.cause).toBe('unreadable');
   });
 
   // --- Too large (file size > maxFileSize) ---
@@ -396,7 +396,8 @@ describe('SpecialistArtifactResolver.resolveArtifact', () => {
     expect(a.mediaType).toBe('application/pdf');
     expect(a.contentKind).toBe('text');
     expect(a.text).toContain('[pdf-extracted]');
-    expect(a.transformations).toContain('utf8-decode');
+    expect(a.extractedText).toContain('[pdf-extracted]');
+    expect(a.transformations).toContain('local-text-extraction');
     expect(a.compatibility.status).toBe('compatible');
     expect(a.compatibility.matchedInput).toBe('text/plain');
   });
