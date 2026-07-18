@@ -221,7 +221,9 @@ import {
   type SpecialistInvocation,
   type SpecialistRequestOptions,
   type SpecialistRequest,
+  type SpecialistTransport,
 } from './specialists/adapter/index.js';
+import { defaultSpecialistHandlers } from './specialists/services/index.js';
 import {
   SpecialistArtifactResolver,
   type ArtifactResolutionResult,
@@ -348,6 +350,8 @@ export class CoreApp {
   private _specialistArtifactResolver: SpecialistArtifactResolver;
   /** Story 4.9: lazily-initialized shared specialist adapter. */
   private _specialistAdapter: SharedSpecialistAdapter | null = null;
+  /** Story 4.10: injectable transport override for tests. */
+  private _specialistTransport: SpecialistTransport | null = null;
   /** Story 4.14: lazily-initialized in-memory evidence repository. */
   private _specialistEvidenceRepo: InMemoryEvidenceRepository | null = null;
 
@@ -716,7 +720,7 @@ export class CoreApp {
     // Lazily initialize the adapter.
     if (!this._specialistAdapter) {
       this._specialistAdapter = new SharedSpecialistAdapter({
-        transport: new FetchSpecialistTransport(),
+        transport: this._specialistTransport ?? new FetchSpecialistTransport(),
         clock: this.clock,
         resolveRawKey: async () => {
           const key = await this.credentials.get('aiforthai');
@@ -725,10 +729,22 @@ export class CoreApp {
           }
           return key;
         },
+        handlers: defaultSpecialistHandlers(),
       });
     }
 
     return this._specialistAdapter.invoke(request, entry, healthSnapshot);
+  }
+
+  /**
+   * Set a transport override for tests. Clears the cached adapter so the next
+   * invokeSpecialist call rebuilds with the override. Only used in offline tests
+   * (Stories 4.10–4.13, 4.18–4.20).
+   */
+  setSpecialistTransportForTest(transport: SpecialistTransport): void {
+    if (process.env.NODE_ENV !== 'test') throw new Error('setSpecialistTransportForTest is test-only and must not be called in production.');
+    this._specialistTransport = transport;
+    this._specialistAdapter = null;
   }
 
   // --- Story 4.14: Specialist Evidence + CacheManifest ---
