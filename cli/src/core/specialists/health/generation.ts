@@ -108,14 +108,21 @@ export function buildSpecialistEffectiveConfiguration(
       detail: `Registry entry "${entry.id}" is missing required field: endpoint.`,
     };
   }
-  if (!entry.contractVersion) {
+  if (!entry.upstreamId) {
+    return {
+      ok: false,
+      cause: 'missing-field',
+      detail: `Registry entry "${entry.id}" is missing required field: upstreamId.`,
+    };
+  }
+  if (!entry.contractVersion || !entry.contractVersion.trim()) {
     return {
       ok: false,
       cause: 'missing-field',
       detail: `Registry entry "${entry.id}" is missing required field: contractVersion.`,
     };
   }
-  if (!entry.adapterVersion) {
+  if (!entry.adapterVersion || !entry.adapterVersion.trim()) {
     return {
       ok: false,
       cause: 'missing-field',
@@ -150,7 +157,7 @@ export function buildSpecialistEffectiveConfiguration(
     };
   }
 
-  if (!transportPolicy.allowedProtocols.includes(endpointProtocol)) {
+  if (!transportPolicy.allowedProtocols.some((p) => p.toLowerCase() === endpointProtocol)) {
     return {
       ok: false,
       cause: 'transport-policy',

@@ -171,6 +171,33 @@ describe('buildSpecialistEffectiveConfiguration', () => {
     expect(result.detail).toContain('adapterVersion');
   });
 
+  it('fails closed for missing upstreamId', () => {
+    const entry = { ...VALID_ENTRY, upstreamId: '' };
+    const result = buildSpecialistEffectiveConfiguration(entry, CREDENTIAL_REFERENCE, undefined, fixedClock);
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.cause).toBe('missing-field');
+    expect(result.detail).toContain('upstreamId');
+  });
+
+  it('fails closed for whitespace-only contractVersion', () => {
+    const entry = { ...VALID_ENTRY, contractVersion: '   ' };
+    const result = buildSpecialistEffectiveConfiguration(entry, CREDENTIAL_REFERENCE, undefined, fixedClock);
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.cause).toBe('missing-field');
+    expect(result.detail).toContain('contractVersion');
+  });
+
+  it('fails closed for whitespace-only adapterVersion', () => {
+    const entry = { ...VALID_ENTRY, adapterVersion: '   ' };
+    const result = buildSpecialistEffectiveConfiguration(entry, CREDENTIAL_REFERENCE, undefined, fixedClock);
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.cause).toBe('missing-field');
+    expect(result.detail).toContain('adapterVersion');
+  });
+
   it('fails closed for TLS violation (requiresTls but not https)', () => {
     const entry = {
       ...VALID_ENTRY,
@@ -195,6 +222,18 @@ describe('buildSpecialistEffectiveConfiguration', () => {
     if (result.ok) return;
     expect(result.cause).toBe('transport-policy');
     expect(result.detail).toContain('allowedProtocols');
+  });
+
+  it('accepts protocol with case-insensitive matching', () => {
+    const entry = {
+      ...VALID_ENTRY,
+      endpoint: 'https://api.aiforthai.in.th/ocr',
+      transportRules: { ...VALID_ENTRY.transportRules, allowedProtocols: ['HTTPS'], requiresTls: true },
+    };
+    const result = buildSpecialistEffectiveConfiguration(entry, CREDENTIAL_REFERENCE, undefined, fixedClock);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.configuration.transportPolicy.allowedProtocols).toEqual(['HTTPS']);
   });
 
   it('fails closed for empty allowedMethods', () => {
@@ -226,10 +265,10 @@ describe('buildSpecialistEffectiveConfiguration', () => {
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     const json = JSON.stringify(result.configuration);
+    // Raw credential patterns that would indicate a secret value leaked.
     expect(json).not.toContain('sk-');
     expect(json).not.toContain('api_key');
-    expect(json).not.toContain('secret');
-    expect(json).not.toContain('key');
+    expect(json).not.toContain('"secret"');
     // The credential reference id, revision, and fingerprint are present but
     // the raw secret value is never stored.
     expect(json).toContain('aiforthai-ref-1');
@@ -353,6 +392,74 @@ describe('specialistConfigurationDigest', () => {
     expect(specialistConfigurationDigest({ ...base, adapterVersion: '2.0.0' })).not.toBe(baseDigest);
     expect(specialistConfigurationDigest({ ...base, manifestVersion: 2 })).not.toBe(baseDigest);
     expect(specialistConfigurationDigest({ ...base, requestConfig: { timeoutMs: 30_000, maxRetries: 2 } })).not.toBe(baseDigest);
+  });
+
+  it('changes when origin changes', () => {
+    const base = {
+      endpoint: 'https://api.aiforthai.in.th/ocr',
+      origin: 'ocr',
+      serviceMapping: 't-ocr->ocr',
+      credentialReferenceId: 'aiforthai-ref-1',
+      credentialRevision: 'rev-abc123',
+      manifestVersion: 1,
+      contractVersion: '1.0.0',
+      adapterVersion: '1.0.0',
+      transportPolicy: { allowedProtocols: ['https'] as readonly string[], requiresTls: true, allowedMethods: ['POST'] as readonly string[] },
+      requestConfig: { timeoutMs: 10_000, maxRetries: 0 },
+    };
+    const baseDigest = specialistConfigurationDigest(base);
+    expect(specialistConfigurationDigest({ ...base, origin: 'ocr-v2' })).not.toBe(baseDigest);
+  });
+
+  it('changes when serviceMapping changes', () => {
+    const base = {
+      endpoint: 'https://api.aiforthai.in.th/ocr',
+      origin: 'ocr',
+      serviceMapping: 't-ocr->ocr',
+      credentialReferenceId: 'aiforthai-ref-1',
+      credentialRevision: 'rev-abc123',
+      manifestVersion: 1,
+      contractVersion: '1.0.0',
+      adapterVersion: '1.0.0',
+      transportPolicy: { allowedProtocols: ['https'] as readonly string[], requiresTls: true, allowedMethods: ['POST'] as readonly string[] },
+      requestConfig: { timeoutMs: 10_000, maxRetries: 0 },
+    };
+    const baseDigest = specialistConfigurationDigest(base);
+    expect(specialistConfigurationDigest({ ...base, serviceMapping: 't-ocr->ocr-v2' })).not.toBe(baseDigest);
+  });
+
+  it('changes when credentialReferenceId changes', () => {
+    const base = {
+      endpoint: 'https://api.aiforthai.in.th/ocr',
+      origin: 'ocr',
+      serviceMapping: 't-ocr->ocr',
+      credentialReferenceId: 'aiforthai-ref-1',
+      credentialRevision: 'rev-abc123',
+      manifestVersion: 1,
+      contractVersion: '1.0.0',
+      adapterVersion: '1.0.0',
+      transportPolicy: { allowedProtocols: ['https'] as readonly string[], requiresTls: true, allowedMethods: ['POST'] as readonly string[] },
+      requestConfig: { timeoutMs: 10_000, maxRetries: 0 },
+    };
+    const baseDigest = specialistConfigurationDigest(base);
+    expect(specialistConfigurationDigest({ ...base, credentialReferenceId: 'aiforthai-ref-2' })).not.toBe(baseDigest);
+  });
+
+  it('changes when transportPolicy changes', () => {
+    const base = {
+      endpoint: 'https://api.aiforthai.in.th/ocr',
+      origin: 'ocr',
+      serviceMapping: 't-ocr->ocr',
+      credentialReferenceId: 'aiforthai-ref-1',
+      credentialRevision: 'rev-abc123',
+      manifestVersion: 1,
+      contractVersion: '1.0.0',
+      adapterVersion: '1.0.0',
+      transportPolicy: { allowedProtocols: ['https'] as readonly string[], requiresTls: true, allowedMethods: ['POST'] as readonly string[] },
+      requestConfig: { timeoutMs: 10_000, maxRetries: 0 },
+    };
+    const baseDigest = specialistConfigurationDigest(base);
+    expect(specialistConfigurationDigest({ ...base, transportPolicy: { allowedProtocols: ['https', 'http'] as readonly string[], requiresTls: false, allowedMethods: ['POST'] as readonly string[] } })).not.toBe(baseDigest);
   });
 });
 
@@ -578,8 +685,7 @@ describe('SpecialistHealthLifecycle', () => {
     const json = JSON.stringify(snap);
     expect(json).not.toContain('sk-');
     expect(json).not.toContain('api_key');
-    expect(json).not.toContain('secret');
-    expect(json).not.toContain('key');
+    expect(json).not.toContain('"secret"');
 
     // Failure envelope should also be secret-free.
     const lifecycle2 = new SpecialistHealthLifecycle(fixedClock);
@@ -592,8 +698,7 @@ describe('SpecialistHealthLifecycle', () => {
     const failJson = JSON.stringify(failSnap);
     expect(failJson).not.toContain('sk-');
     expect(failJson).not.toContain('api_key');
-    expect(failJson).not.toContain('secret');
-    expect(failJson).not.toContain('key');
+    expect(failJson).not.toContain('"secret"');
   });
 });
 

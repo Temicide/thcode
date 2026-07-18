@@ -186,6 +186,7 @@ import {
   onboardAiForThai,
   hasAiForThaiKey,
   InMemoryCredentialPersistence,
+  type AiForThaiCredentialReference,
   type AiForThaiOnboardingResult,
   type CredentialRemovalResult,
   type CredentialRotationResult,
@@ -474,8 +475,17 @@ export class CoreApp {
       };
     }
 
-    const loaded = await this._aiforthaiPersistence.load();
-    const credentialReference = loaded.ok ? loaded.reference : null;
+    let loaded: { ok: boolean; reference?: AiForThaiCredentialReference };
+    try {
+      loaded = await this._aiforthaiPersistence.load();
+    } catch {
+      return {
+        ok: false,
+        cause: 'missing-credential',
+        detail: `Credential persistence unavailable for service "${serviceId}".`,
+      };
+    }
+    const credentialReference: AiForThaiCredentialReference | null = loaded.ok ? (loaded.reference ?? null) : null;
 
     // Use the default request config (Stories 4.10–4.13 may override).
     return buildSpecialistEffectiveConfiguration(entry, credentialReference, undefined, this.clock);
