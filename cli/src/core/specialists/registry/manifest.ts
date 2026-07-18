@@ -7,6 +7,7 @@ import {
   type CapabilityRegistryEntry,
   type RegistryFailClosedEvidence,
   type RegistryLoadResult,
+  type HealthCanarySpec,
 } from './types.js';
 
 /** Error thrown only by low-level callers that opt into throwing (kept for
@@ -249,6 +250,36 @@ export function validateManifest(raw: unknown, now: string): RegistryLoadResult 
       return failClosed(manifestVersion, 'malformed', `entries[${i}].invokableStateReason must be null when invokable is true`, now);
     }
 
+    let healthCanary: HealthCanarySpec | undefined;
+    if (invokable) {
+      if (typeof e.healthCanary !== 'object' || e.healthCanary === null || Array.isArray(e.healthCanary)) {
+        return failClosed(manifestVersion, 'missing-field', `entries[${i}].healthCanary must be a reviewed static capability canary`, now);
+      }
+      const canary = e.healthCanary as Record<string, unknown>;
+      if (canary.kind !== 'static-capability-canary' || canary.dataClassification !== 'built-in-non-user') {
+        return failClosed(manifestVersion, 'malformed', `entries[${i}].healthCanary must declare a built-in non-user static capability canary`, now);
+      }
+      if (canary.method !== 'POST' || typeof canary.mediaType !== 'string' || !isStringArray(e.supportedInputs) || !e.supportedInputs.includes(canary.mediaType)) {
+        return failClosed(manifestVersion, 'malformed', `entries[${i}].healthCanary must use an allowed POST media type`, now);
+      }
+      if (typeof canary.fixtureDigest !== 'string' || !/^[a-f0-9]{64}$/i.test(canary.fixtureDigest)) {
+        return failClosed(manifestVersion, 'malformed', `entries[${i}].healthCanary.fixtureDigest must be a SHA-256 hex digest`, now);
+      }
+      if (canary.responseRule !== 'valid-service-response' || canary.contractVersion !== e.contractVersion || canary.adapterVersion !== e.adapterVersion) {
+        return failClosed(manifestVersion, 'malformed', `entries[${i}].healthCanary must bind the current contract and adapter versions`, now);
+      }
+      healthCanary = {
+        kind: 'static-capability-canary',
+        dataClassification: 'built-in-non-user',
+        method: 'POST',
+        mediaType: canary.mediaType,
+        fixtureDigest: canary.fixtureDigest,
+        responseRule: 'valid-service-response',
+        contractVersion: canary.contractVersion as string,
+        adapterVersion: canary.adapterVersion as string,
+      };
+    }
+
     entries.push({
       id,
       upstreamId: e.upstreamId as string,
@@ -289,6 +320,7 @@ export function validateManifest(raw: unknown, now: string): RegistryLoadResult 
         testedAt: ctr.testedAt as string,
         summary: ctr.summary as string,
       },
+      healthCanary,
       invokable,
       invokableStateReason,
     });

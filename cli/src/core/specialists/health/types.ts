@@ -85,6 +85,44 @@ export interface SpecialistHealthSnapshot {
  * (by Stories 4.10–4.13) and never appears in Evidence, the snapshot, or the
  * failure envelope (AD-11, AD-24).
  */
+export type SpecialistRetestProbeResult = HealthProbeResult | {
+  readonly ok: false;
+  readonly outcome: 'cancelled' | 'unknown';
+  readonly safeReason?: string;
+};
+
 export type SpecialistHealthProbe = (
   gen: SpecialistEffectiveConfiguration,
-) => Promise<HealthProbeResult>;
+) => Promise<SpecialistRetestProbeResult>;
+
+/** Explicit retest outcomes are kept distinct from advisory catalog controls.
+ * Cancellation and unknown outcomes are not successful health evidence and must
+ * never restore availability (AD-8, AD-13, AD-18). */
+export type SpecialistRetestOutcome =
+  | 'passed'
+  | 'failed'
+  | 'cancelled'
+  | 'stale'
+  | 'unknown';
+
+export type SpecialistRetestScope = 'service' | 'credential-group';
+
+export interface SpecialistRetestRequest {
+  readonly serviceId: string;
+  readonly scope?: SpecialistRetestScope;
+  readonly operationId: string;
+}
+
+export interface SpecialistRetestResult {
+  readonly ok: boolean;
+  readonly operationId: string;
+  readonly serviceId: string;
+  readonly scope: SpecialistRetestScope;
+  readonly outcome: SpecialistRetestOutcome;
+  readonly generationId?: string;
+  readonly restoredServiceIds: readonly string[];
+  readonly state: HealthState;
+  readonly checkedAt?: string;
+  readonly probeEvidence?: string;
+  readonly safeReason: string;
+}

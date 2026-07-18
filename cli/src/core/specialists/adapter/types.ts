@@ -7,6 +7,7 @@
 import type { SpecialistEffectiveConfiguration } from '../health/types.js';
 import type { PreparedPayloadManifest, ConsentReference } from '../consent/index.js';
 import type { PreparedArtifact } from '../artifacts/types.js';
+import type { HealthCanarySpec } from '../registry/types.js';
 
 // ---------------------------------------------------------------------------
 // Request contracts
@@ -197,6 +198,18 @@ export type SpecialistInvocation = SpecialistOutcome | SpecialistAdapterRefusal;
 // Handler contract
 // ---------------------------------------------------------------------------
 
+/**
+ * A health-only probe request. It deliberately excludes user artifacts,
+ * prepared payload manifests, and consent references: the canary is reviewed
+ * built-in non-user data declared by the offline Capability Registry.
+ */
+export interface SpecialistHealthProbeRequest {
+  readonly serviceId: string;
+  readonly effectiveConfiguration: SpecialistEffectiveConfiguration;
+  readonly canary: HealthCanarySpec;
+  readonly startedAt: string;
+}
+
 /** A per-service extension point (registered by Stories 4.10–4.13).
  * buildTransportRequest uses a CredentialScope that resolves the raw key IN
  * SCOPE ONLY — the key never enters Evidence, logs, the transport request's
@@ -204,6 +217,8 @@ export type SpecialistInvocation = SpecialistOutcome | SpecialistAdapterRefusal;
  * SpecialistResult WITHOUT inventing fields. */
 export interface SpecialistServiceHandler {
   readonly serviceId: string;
+  /** SHA-256 of the handler's checked-in non-user canary input. */
+  readonly healthCanaryFixtureDigest?: string;
   buildTransportRequest(
     request: SpecialistRequest,
     credentialScope: CredentialScope,
@@ -212,6 +227,11 @@ export interface SpecialistServiceHandler {
     raw: SpecialistRawResponse,
     request: SpecialistRequest,
   ): SpecialistResult | { readonly ok: false; readonly parseFailure: { readonly category: 'malformed-response'; readonly causeCode: string; readonly safeMessage: string } };
+  buildHealthProbeRequest?(
+    request: SpecialistHealthProbeRequest,
+    credentialScope: CredentialScope,
+  ): Promise<SpecialistTransportRequest>;
+  acceptsHealthProbeResponse?(raw: SpecialistRawResponse): boolean;
 }
 
 // ---------------------------------------------------------------------------

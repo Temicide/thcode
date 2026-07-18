@@ -3,6 +3,7 @@
 // through this facade via typed intents — never touching fs, network, or
 // child_process directly.
 
+import { randomUUID } from 'node:crypto';
 import { AgentLoop, type ApprovalCallback } from './agent/loop.js';
 import { dispatchTyphoonTurn, durableEvent } from './agent/dispatch.js';
 import { validateProposal } from './agent/validation.js';
@@ -194,9 +195,13 @@ import {
 } from './specialists/credential/index.js';
 import {
   SpecialistHealthLifecycle,
+  createSpecialistHealthProbe,
   buildSpecialistEffectiveConfiguration,
   type SpecialistGenerationResult,
   type SpecialistHealthSnapshot,
+  type SpecialistRetestRequest,
+  type SpecialistRetestResult,
+  type SpecialistEffectiveConfiguration,
 } from './specialists/health/index.js';
 import {
   routeSpecialistPrompt,
@@ -373,6 +378,8 @@ export class CoreApp {
   private _specialistCacheIndex: CacheIndex | null = null;
   /** Story 4.15: lazily-initialized cache invalidation port. */
   private _specialistCacheInvalidationPort: InMemoryCacheInvalidationPort | null = null;
+  /** Services with a registered reviewed static-canary probe. */
+  private readonly _specialistHealthProbes = new Set<string>();
 
   constructor(opts: CoreAppOptions = {}) {
     // Fail-closed startup: incompatible protocol major version throws before
@@ -473,6 +480,33 @@ export class CoreApp {
     return this._specialistHealth;
   }
 
+  /** Register the reviewed static-canary probe for one invokable Specialist. */
+  private registerSpecialistHealthProbe(serviceId: string): boolean {
+    if (this._specialistHealthProbes.has(serviceId)) return true;
+    const registry = this.capabilityRegistry();
+    if (!registry.ok) return false;
+    const entry = registry.byId(serviceId);
+    const handler = defaultSpecialistHandlers().find((candidate) => candidate.serviceId === serviceId);
+    if (!entry || !entry.invokable || !entry.healthCanary || !handler) return false;
+
+    this._specialistHealth.registerProbe(
+      serviceId,
+      createSpecialistHealthProbe({
+        entry,
+        handler,
+        transport: this._specialistTransport ?? new FetchSpecialistTransport(),
+        resolveRawKey: async () => {
+          const key = await this.credentials.get(AI_FOR_THAI_CREDENTIAL_ID);
+          if (key === null) throw new Error('AI-for-Thai credential not available.');
+          return key;
+        },
+        clock: this.clock,
+      }),
+    );
+    this._specialistHealthProbes.add(serviceId);
+    return true;
+  }
+
   /**
    * Resolve a shared credential scope only from currently registered effective
    * configurations. Registry invokability alone is not proof of a shared key;
@@ -541,7 +575,10 @@ export class CoreApp {
    * via the existing persistence, and builds request config defaults. Returns
    * the typed SpecialistGenerationResult. Does NOT register or check health.
    */
-  async buildSpecialistConfiguration(serviceId: string): Promise<SpecialistGenerationResult> {
+  async buildSpecialistConfiguration(
+    serviceId: string,
+    opts: { readonly generationNonce?: string } = {},
+  ): Promise<SpecialistGenerationResult> {
     const registry = this.capabilityRegistry();
     if (!registry.ok) {
       return {
@@ -573,7 +610,7 @@ export class CoreApp {
     const credentialReference: AiForThaiCredentialReference | null = loaded.ok ? (loaded.reference ?? null) : null;
 
     // Use the default request config (Stories 4.10–4.13 may override).
-    return buildSpecialistEffectiveConfiguration(entry, credentialReference, undefined, this.clock);
+    return buildSpecialistEffectiveConfiguration(entry, credentialReference, undefined, this.clock, opts.generationNonce);
   }
 
   /**
@@ -584,6 +621,7 @@ export class CoreApp {
    * No Specialist is invoked here.
    */
   async checkSpecialistHealth(serviceId: string): Promise<SpecialistHealthSnapshot> {
+    this.registerSpecialistHealthProbe(serviceId);
     const result = await this.buildSpecialistConfiguration(serviceId);
     if (!result.ok) {
       return { serviceId, state: 'unconfigured' };
@@ -591,6 +629,61 @@ export class CoreApp {
 
     this._specialistHealth.register(result.configuration);
     return this._specialistHealth.check(serviceId);
+  }
+
+  /**
+   * Story 4.17: perform a real, explicit live retest. Unlike catalog advice,
+   * this creates a fresh generation, enters checking through the lifecycle, and
+   * restores only the scope proven by current-generation probes.
+   */
+  async retestSpecialist(
+    serviceId: string,
+    opts: {
+      readonly operationId?: string;
+      readonly scope?: 'service' | 'credential-group';
+    } = {},
+  ): Promise<SpecialistRetestResult> {
+    const operationId = opts.operationId ?? `retest-${randomUUID()}`;
+    const nonce = randomUUID();
+    const scope = opts.scope ?? 'service';
+    this.registerSpecialistHealthProbe(serviceId);
+    const request: SpecialistRetestRequest = { serviceId, scope, operationId };
+    const configResult = await this.buildSpecialistConfiguration(serviceId, { generationNonce: nonce });
+    if (!configResult.ok) {
+      return {
+        ok: false,
+        operationId,
+        serviceId,
+        scope,
+        outcome: 'failed',
+        restoredServiceIds: [],
+        state: 'unconfigured',
+        safeReason: configResult.detail,
+      };
+    }
+
+    if (scope === 'credential-group') {
+      const registry = this.capabilityRegistry();
+      if (!registry.ok) return this._specialistHealth.retest({ ...request, scope: 'service' }, configResult.configuration);
+      const configurations: SpecialistEffectiveConfiguration[] = [];
+      for (const member of registry.invokable()) {
+        this.registerSpecialistHealthProbe(member.id);
+        const memberResult = await this.buildSpecialistConfiguration(member.id, { generationNonce: nonce });
+        if (
+          !memberResult.ok
+          || memberResult.configuration.credentialReferenceId !== configResult.configuration.credentialReferenceId
+          || memberResult.configuration.credentialRevision !== configResult.configuration.credentialRevision
+        ) {
+          // A current, matching configuration for every reviewed service is the
+          // required proof for a shared-key operation; do not broaden by guess.
+          return this._specialistHealth.retest({ ...request, scope: 'service' }, configResult.configuration);
+        }
+        configurations.push(memberResult.configuration);
+      }
+      return this._specialistHealth.retestGroup(request, configurations);
+    }
+
+    return this._specialistHealth.retest(request, configResult.configuration);
   }
 
   // --- Story 4.8: Specialist transfer consent ---
@@ -984,6 +1077,7 @@ export class CoreApp {
     if (process.env.NODE_ENV !== 'test') throw new Error('setSpecialistTransportForTest is test-only and must not be called in production.');
     this._specialistTransport = transport;
     this._specialistAdapter = null;
+    this._specialistHealthProbes.clear();
   }
 
   // --- Story 4.14: Specialist Evidence + CacheManifest ---
@@ -2269,6 +2363,41 @@ export class CoreApp {
       return { stdout: '', stderr: `${blocked.cause}: ${blocked.next}`, json: JSON.stringify({ status: 'blocked', cause: blocked.cause, next: blocked.next, exitClass: blocked.exitClass, exitCode: blocked.exitCode }), exitCode: blocked.exitCode };
     }
     return this.executeCommand(cmd, parse.args);
+  }
+
+  /**
+   * Async command path for explicit live operations. The synchronous command
+   * surface remains backward compatible and can never misrepresent an advisory
+   * catalog action as a completed remote probe.
+   */
+  async dispatchCommandAsync(
+    input: string,
+    opts: { hasTty?: boolean; requireInteractive?: boolean } = {},
+  ): Promise<CommandOutput> {
+    const parse = parseCommand(input);
+    if (!parse.ok || parse.command !== 'tools' || parse.args[0] !== 'retest' || !parse.args[1]) {
+      return this.dispatchCommand(input, opts);
+    }
+
+    const serviceId = parse.args[1];
+    const result = await this.retestSpecialist(serviceId);
+    const body = [
+      `Retest for "${serviceId}":`,
+      '  Progress: checking completed',
+      `  State: ${result.state}`,
+      `  Scope: ${result.scope}`,
+      `  Generation: ${result.generationId ?? 'unavailable'}`,
+      `  Evidence: ${result.probeEvidence ?? 'unavailable'}`,
+      `  Reason: ${result.safeReason}`,
+    ].join('\n');
+    return renderCommandOutput({
+      status: result.ok ? 'succeeded' : 'blocked',
+      cause: result.ok ? undefined : result.safeReason,
+      target: serviceId,
+      operationId: result.operationId,
+      nextStep: result.ok ? 'continue' : 'correct configuration then explicitly retest',
+      body,
+    });
   }
 
   /** Map a parsed command to its CoreApp projection (AC #1, AC #3, AC #5). */

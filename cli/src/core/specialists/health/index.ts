@@ -8,6 +8,11 @@ export {
   type SpecialistGenerationResult,
   type SpecialistHealthSnapshot,
   type SpecialistHealthProbe,
+  type SpecialistRetestProbeResult,
+  type SpecialistRetestOutcome,
+  type SpecialistRetestScope,
+  type SpecialistRetestRequest,
+  type SpecialistRetestResult,
 } from './types.js';
 
 export {
@@ -19,3 +24,7 @@ export {
 export {
   SpecialistHealthLifecycle,
 } from './lifecycle.js';
+
+export {
+  createSpecialistHealthProbe,
+} from './probe.js';

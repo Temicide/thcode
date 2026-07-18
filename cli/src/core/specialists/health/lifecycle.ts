@@ -11,6 +11,8 @@ import type {
   SpecialistEffectiveConfiguration,
   SpecialistHealthProbe,
   SpecialistHealthSnapshot,
+  SpecialistRetestRequest,
+  SpecialistRetestResult,
 } from './types.js';
 import { projectToHealthGeneration } from './generation.js';
 
@@ -76,7 +78,24 @@ export class SpecialistHealthLifecycle {
       }
 
       // Call the specialist probe with the full SpecialistEffectiveConfiguration.
-      return probe(config);
+      // Cancellation/unknown are deliberately converted to unavailable health
+      // evidence; the explicit retest API reads the typed cause and never
+      // promotes either outcome to availability.
+      const result = await probe(config);
+      if ('outcome' in result) {
+        return {
+          ok: false,
+          failure: {
+            category: 'unknown',
+            retryable: false,
+            scope: serviceId,
+            generationId: config.id,
+            safeMessage: result.safeReason ?? `Specialist retest ${result.outcome}.`,
+            causeCode: `retest-${result.outcome}`,
+          },
+        };
+      }
+      return result;
     };
 
     this.registry.registerProbe(serviceId, adapter);
@@ -90,6 +109,103 @@ export class SpecialistHealthLifecycle {
   async check(serviceId: string): Promise<SpecialistHealthSnapshot> {
     const snap = await this.registry.check(serviceId);
     return this.toSpecialistSnapshot(serviceId, snap);
+  }
+
+  /**
+   * Run one explicit, generation-bound retest. Registration happens before the
+   * probe so every retest has a fresh generation and enters `checking`; only a
+   * current pass can restore availability. This is intentionally separate from
+   * catalog advice and normal/background health checks.
+   */
+  async retest(
+    request: SpecialistRetestRequest,
+    configuration: SpecialistEffectiveConfiguration,
+  ): Promise<SpecialistRetestResult> {
+    const prior = this.snapshot(request.serviceId);
+    this.register(configuration);
+    const checked = await this.check(request.serviceId);
+    const stale = checked.generationId !== configuration.id;
+    const failureCause = checked.failure?.causeCode;
+    const outcome = checked.state === 'available' && !stale
+      ? 'passed'
+      : stale
+        ? 'stale'
+        : failureCause === 'retest-cancelled'
+          ? 'cancelled'
+          : failureCause === 'retest-unknown'
+            ? 'unknown'
+            : 'failed';
+
+    // A failed explicit retest cannot clear a prior quarantine. Other failed
+    // outcomes remain in the lifecycle's typed unavailable/unhealthy state.
+    if (outcome !== 'passed' && prior.state === 'quarantined') {
+      this.quarantine(request.serviceId, prior.failure?.safeMessage ?? 'Retest did not restore the quarantined service.');
+    }
+    const finalSnapshot = this.snapshot(request.serviceId);
+    return {
+      ok: outcome === 'passed',
+      operationId: request.operationId,
+      serviceId: request.serviceId,
+      scope: request.scope ?? 'service',
+      outcome,
+      generationId: configuration.id,
+      restoredServiceIds: outcome === 'passed' ? [request.serviceId] : [],
+      state: finalSnapshot.state,
+      checkedAt: finalSnapshot.checkedAt,
+      probeEvidence: finalSnapshot.evidence,
+      safeReason: finalSnapshot.failure?.safeMessage ?? (outcome === 'passed' ? 'Current-generation live probe passed.' : 'Retest did not restore availability.'),
+    };
+  }
+
+  /**
+   * Retest a shared credential group atomically. All configurations are
+   * registered before any check; a partial pass is quarantined and reports no
+   * restored members.
+   */
+  async retestGroup(
+    request: SpecialistRetestRequest,
+    configurations: readonly SpecialistEffectiveConfiguration[],
+  ): Promise<SpecialistRetestResult> {
+    const prior = new Map(configurations.map((config) => [config.serviceId, this.snapshot(config.serviceId)]));
+    for (const configuration of configurations) this.register(configuration);
+    const checked = this.registry.checkAtomically(configurations.map((config) => config.serviceId))
+      .then((snapshots) => snapshots.map((snapshot) => this.toSpecialistSnapshot(snapshot.providerId, snapshot)));
+    const resolvedChecked = await checked;
+    const stale = resolvedChecked.some((snapshot, index) => snapshot.generationId !== configurations[index]?.id);
+    const cancelled = resolvedChecked.some((snapshot) => snapshot.failure?.causeCode === 'retest-cancelled');
+    const unknown = resolvedChecked.some((snapshot) => snapshot.failure?.causeCode === 'retest-unknown');
+    const passed = !stale && resolvedChecked.every((snapshot) => snapshot.state === 'available');
+    const outcome = passed ? 'passed' : stale ? 'stale' : cancelled ? 'cancelled' : unknown ? 'unknown' : 'failed';
+    if (!passed) {
+      for (const configuration of configurations) {
+        const previous = prior.get(configuration.serviceId);
+        if (previous?.state === 'quarantined' || request.scope === 'credential-group') {
+          this.quarantine(configuration.serviceId, previous?.failure?.safeMessage ?? 'Shared credential retest did not pass atomically.');
+        }
+      }
+    }
+    const finalSnapshot = this.snapshot(request.serviceId);
+    return {
+      ok: passed,
+      operationId: request.operationId,
+      serviceId: request.serviceId,
+      scope: 'credential-group',
+      outcome,
+      generationId: configurations.find((config) => config.serviceId === request.serviceId)?.id,
+      restoredServiceIds: passed ? configurations.map((config) => config.serviceId) : [],
+      state: finalSnapshot.state,
+      checkedAt: finalSnapshot.checkedAt,
+      probeEvidence: finalSnapshot.evidence,
+      safeReason: passed ? 'All current-generation credential-group probes passed atomically.' : 'Shared credential-group retest did not pass atomically.',
+    };
+  }
+
+  /** Explicitly named alias for callers that want to distinguish this from a check. */
+  async explicitRetest(
+    request: SpecialistRetestRequest,
+    configuration: SpecialistEffectiveConfiguration,
+  ): Promise<SpecialistRetestResult> {
+    return this.retest(request, configuration);
   }
 
   /**

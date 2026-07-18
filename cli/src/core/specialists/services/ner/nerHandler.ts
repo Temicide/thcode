@@ -16,7 +16,9 @@ import type {
   SpecialistResult,
   SpecialistFieldValue,
   CredentialScope,
+  SpecialistHealthProbeRequest,
 } from '../../adapter/types.js';
+import { FIXTURE_NER_TEXT } from './fixture.js';
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -34,6 +36,7 @@ const ADAPTER_VERSION = '1.0.0';
 
 export class NerSpecialistHandler implements SpecialistServiceHandler {
   readonly serviceId = SERVICE_ID;
+  readonly healthCanaryFixtureDigest = 'e6528fb4fa47a6d854954f4c9902529f413069b79d65c63ab24ee1db11fda2ee';
 
   async buildTransportRequest(
     request: SpecialistRequest,
@@ -72,6 +75,33 @@ export class NerSpecialistHandler implements SpecialistServiceHandler {
       contentType: 'application/json',
       timeoutMs: request.options.timeoutMs,
     };
+  }
+
+  async buildHealthProbeRequest(
+    request: SpecialistHealthProbeRequest,
+    credentialScope: CredentialScope,
+  ): Promise<SpecialistTransportRequest> {
+    if (request.canary.mediaType !== 'text/plain') {
+      throw new Error('named-entity-recognition health canary media type is not approved');
+    }
+    const rawKey = await credentialScope.resolveRawKey();
+    return {
+      method: request.canary.method,
+      url: request.effectiveConfiguration.endpoint,
+      headersSummary: [
+        { name: 'Authorization', value: '[redacted]' },
+        { name: 'Content-Type', value: 'application/json' },
+      ],
+      fetchHeaders: { Authorization: `Bearer ${rawKey}`, 'Content-Type': 'application/json' },
+      bodyKind: 'text',
+      bodyText: JSON.stringify({ text: FIXTURE_NER_TEXT }),
+      contentType: 'application/json',
+      timeoutMs: request.effectiveConfiguration.requestConfig.timeoutMs,
+    };
+  }
+
+  acceptsHealthProbeResponse(raw: SpecialistRawResponse): boolean {
+    return isJsonObject(raw.bodyText);
   }
 
   parseResult(
@@ -192,5 +222,15 @@ export class NerSpecialistHandler implements SpecialistServiceHandler {
       evidenceRef: undefined,
       createdAt: _request.startedAt,
     };
+  }
+}
+
+function isJsonObject(bodyText: string | undefined): boolean {
+  if (!bodyText) return false;
+  try {
+    const parsed: unknown = JSON.parse(bodyText);
+    return typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed);
+  } catch {
+    return false;
   }
 }

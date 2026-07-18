@@ -22,6 +22,9 @@ export interface CatalogControlResult {
   readonly ok: boolean;
   readonly message: string;
   readonly entry?: CatalogEntryProjection;
+  /** Retest intent is not a completed probe; app orchestration owns execution. */
+  readonly action?: 'retest-live';
+  readonly recoveryState?: HealthState | 'not-started';
 }
 
 /** Result of a search operation. */
@@ -253,6 +256,8 @@ export function retestService(
 
   return {
     ok: true,
-    message: `Retest recommended for "${id}". Current state: ${canonicalState}. Use the health check system to trigger a live probe.`,
+    message: `Retest recommended for "${id}". Explicit live retest available. Current state: ${canonicalState}. No probe has run yet.`,
+    action: 'retest-live',
+    recoveryState: healthState,
   };
 }

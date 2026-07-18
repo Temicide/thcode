@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
@@ -798,6 +799,25 @@ describe('specialist registry — sanitized fail-closed evidence', () => {
       expect(result.evidence.manifestVersion).toBe(3);
       expect(result.evidence.cause).toBe('revoked');
       expect(result.evidence.detail).toContain('test revocation');
+    }
+  });
+});
+
+describe('specialist registry — reviewed health canaries', () => {
+  it('fails closed when an invokable entry is missing its approved static canary', () => {
+    const raw = JSON.parse(readFileSync(MANIFEST_PATH, 'utf8')) as { entries: Array<Record<string, unknown>> };
+    delete raw.entries[0]!.healthCanary;
+    const result = validateManifest(raw, NOW);
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.evidence.cause).toBe('missing-field');
+  });
+
+  it('binds each invokable entry to a built-in, version-matched canary', () => {
+    const registry = CapabilityRegistry.load(NOW, MANIFEST_PATH);
+    for (const entry of registry.invokable()) {
+      expect(entry.healthCanary?.dataClassification).toBe('built-in-non-user');
+      expect(entry.healthCanary?.contractVersion).toBe(entry.contractVersion);
+      expect(entry.healthCanary?.adapterVersion).toBe(entry.adapterVersion);
     }
   });
 });

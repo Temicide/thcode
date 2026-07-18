@@ -15,7 +15,9 @@ import type {
   SpecialistResult,
   SpecialistFieldValue,
   CredentialScope,
+  SpecialistHealthProbeRequest,
 } from '../../adapter/types.js';
+import { FIXTURE_ADDRESS_TEXT } from './fixture.js';
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -46,6 +48,7 @@ const ADDRESS_COMPONENTS = [
 
 export class ExtractAddressSpecialistHandler implements SpecialistServiceHandler {
   readonly serviceId = SERVICE_ID;
+  readonly healthCanaryFixtureDigest = 'c19b73451e86b3cfaba336fb4efabb5dfd33df657582ed160f5fd6a0888a4a5f';
 
   async buildTransportRequest(
     request: SpecialistRequest,
@@ -84,6 +87,33 @@ export class ExtractAddressSpecialistHandler implements SpecialistServiceHandler
       contentType: 'application/json',
       timeoutMs: request.options.timeoutMs,
     };
+  }
+
+  async buildHealthProbeRequest(
+    request: SpecialistHealthProbeRequest,
+    credentialScope: CredentialScope,
+  ): Promise<SpecialistTransportRequest> {
+    if (request.canary.mediaType !== 'text/plain') {
+      throw new Error('extract-address health canary media type is not approved');
+    }
+    const rawKey = await credentialScope.resolveRawKey();
+    return {
+      method: request.canary.method,
+      url: request.effectiveConfiguration.endpoint,
+      headersSummary: [
+        { name: 'Authorization', value: '[redacted]' },
+        { name: 'Content-Type', value: 'application/json' },
+      ],
+      fetchHeaders: { Authorization: `Bearer ${rawKey}`, 'Content-Type': 'application/json' },
+      bodyKind: 'text',
+      bodyText: JSON.stringify({ text: FIXTURE_ADDRESS_TEXT }),
+      contentType: 'application/json',
+      timeoutMs: request.effectiveConfiguration.requestConfig.timeoutMs,
+    };
+  }
+
+  acceptsHealthProbeResponse(raw: SpecialistRawResponse): boolean {
+    return isJsonObject(raw.bodyText);
   }
 
   parseResult(
@@ -218,5 +248,15 @@ export class ExtractAddressSpecialistHandler implements SpecialistServiceHandler
       evidenceRef: undefined,
       createdAt: _request.startedAt,
     };
+  }
+}
+
+function isJsonObject(bodyText: string | undefined): boolean {
+  if (!bodyText) return false;
+  try {
+    const parsed: unknown = JSON.parse(bodyText);
+    return typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed);
+  } catch {
+    return false;
   }
 }

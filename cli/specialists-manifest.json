@@ -49,6 +49,16 @@
         "testedAt": "2026-07-17T00:00:00.000Z",
         "summary": "All contract tests pass for T-OCR v1.0.0"
       },
+      "healthCanary": {
+        "kind": "static-capability-canary",
+        "dataClassification": "built-in-non-user",
+        "method": "POST",
+        "mediaType": "image/png",
+        "fixtureDigest": "c8af280b69cb50aa121299fbf0413fdf45b6ee1a58b3ce4f6da1776d1ed8e210",
+        "responseRule": "valid-service-response",
+        "contractVersion": "1.0.0",
+        "adapterVersion": "1.0.0"
+      },
       "invokable": true,
       "invokableStateReason": null
     },
@@ -94,6 +104,16 @@
         "passed": true,
         "testedAt": "2026-07-17T00:00:00.000Z",
         "summary": "All contract tests pass for Speech-to-Text v1.0.0"
+      },
+      "healthCanary": {
+        "kind": "static-capability-canary",
+        "dataClassification": "built-in-non-user",
+        "method": "POST",
+        "mediaType": "audio/wav",
+        "fixtureDigest": "4d83526d4156d5ab2afdcc8d1e4bdb3df412283a03bcb092bbc4d12149586755",
+        "responseRule": "valid-service-response",
+        "contractVersion": "1.0.0",
+        "adapterVersion": "1.0.0"
       },
       "invokable": true,
       "invokableStateReason": null
@@ -141,6 +161,16 @@
         "testedAt": "2026-07-17T00:00:00.000Z",
         "summary": "All contract tests pass for Extract Address v1.0.0"
       },
+      "healthCanary": {
+        "kind": "static-capability-canary",
+        "dataClassification": "built-in-non-user",
+        "method": "POST",
+        "mediaType": "text/plain",
+        "fixtureDigest": "c19b73451e86b3cfaba336fb4efabb5dfd33df657582ed160f5fd6a0888a4a5f",
+        "responseRule": "valid-service-response",
+        "contractVersion": "1.0.0",
+        "adapterVersion": "1.0.0"
+      },
       "invokable": true,
       "invokableStateReason": null
     },
@@ -186,6 +216,16 @@
         "passed": true,
         "testedAt": "2026-07-17T00:00:00.000Z",
         "summary": "All contract tests pass for Named Entity Recognition v1.0.0"
+      },
+      "healthCanary": {
+        "kind": "static-capability-canary",
+        "dataClassification": "built-in-non-user",
+        "method": "POST",
+        "mediaType": "text/plain",
+        "fixtureDigest": "e6528fb4fa47a6d854954f4c9902529f413069b79d65c63ab24ee1db11fda2ee",
+        "responseRule": "valid-service-response",
+        "contractVersion": "1.0.0",
+        "adapterVersion": "1.0.0"
       },
       "invokable": true,
       "invokableStateReason": null

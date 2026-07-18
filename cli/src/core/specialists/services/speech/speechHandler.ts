@@ -14,7 +14,9 @@ import type {
   SpecialistResult,
   SpecialistFieldValue,
   CredentialScope,
+  SpecialistHealthProbeRequest,
 } from '../../adapter/types.js';
+import { FIXTURE_WAV_BYTES } from './fixture.js';
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -32,6 +34,7 @@ const ADAPTER_VERSION = '1.0.0';
 
 export class SpeechToTextSpecialistHandler implements SpecialistServiceHandler {
   readonly serviceId = SERVICE_ID;
+  readonly healthCanaryFixtureDigest = '4d83526d4156d5ab2afdcc8d1e4bdb3df412283a03bcb092bbc4d12149586755';
 
   async buildTransportRequest(
     request: SpecialistRequest,
@@ -73,6 +76,33 @@ export class SpeechToTextSpecialistHandler implements SpecialistServiceHandler {
       contentType: 'application/json',
       timeoutMs: request.options.timeoutMs,
     };
+  }
+
+  async buildHealthProbeRequest(
+    request: SpecialistHealthProbeRequest,
+    credentialScope: CredentialScope,
+  ): Promise<SpecialistTransportRequest> {
+    if (request.canary.mediaType !== 'audio/wav') {
+      throw new Error('speech-to-text health canary media type is not approved');
+    }
+    const rawKey = await credentialScope.resolveRawKey();
+    return {
+      method: request.canary.method,
+      url: request.effectiveConfiguration.endpoint,
+      headersSummary: [
+        { name: 'Authorization', value: '[redacted]' },
+        { name: 'Content-Type', value: 'application/json' },
+      ],
+      fetchHeaders: { Authorization: `Bearer ${rawKey}`, 'Content-Type': 'application/json' },
+      bodyKind: 'text',
+      bodyText: JSON.stringify({ audio: Buffer.from(FIXTURE_WAV_BYTES).toString('base64'), mime: request.canary.mediaType }),
+      contentType: 'application/json',
+      timeoutMs: request.effectiveConfiguration.requestConfig.timeoutMs,
+    };
+  }
+
+  acceptsHealthProbeResponse(raw: SpecialistRawResponse): boolean {
+    return isJsonObject(raw.bodyText);
   }
 
   parseResult(
@@ -197,5 +227,15 @@ export class SpeechToTextSpecialistHandler implements SpecialistServiceHandler {
       evidenceRef: undefined,
       createdAt: _request.startedAt,
     };
+  }
+}
+
+function isJsonObject(bodyText: string | undefined): boolean {
+  if (!bodyText) return false;
+  try {
+    const parsed: unknown = JSON.parse(bodyText);
+    return typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed);
+  } catch {
+    return false;
   }
 }

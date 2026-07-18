@@ -42,6 +42,22 @@ export interface TransportRules {
   readonly allowedMethods: readonly string[];
 }
 
+/**
+ * A reviewed, non-user static capability canary. It proves the current
+ * credential/configuration against the exact service contract without sending
+ * workspace or prompt content and never substitutes for a user transfer.
+ */
+export interface HealthCanarySpec {
+  readonly kind: 'static-capability-canary';
+  readonly dataClassification: 'built-in-non-user';
+  readonly method: 'POST';
+  readonly mediaType: string;
+  readonly fixtureDigest: string;
+  readonly responseRule: 'valid-service-response';
+  readonly contractVersion: string;
+  readonly adapterVersion: string;
+}
+
 /** A single entry in the Capability Registry. */
 export interface CapabilityRegistryEntry {
   /** Stable thcode identity (e.g. `t-ocr`). */
@@ -84,6 +100,8 @@ export interface CapabilityRegistryEntry {
   readonly adapterVersion: string;
   /** Latest contract-test result. */
   readonly latestContractTestResult: ContractTestResult;
+  /** Reviewed static health canary. Required for invokable entries loaded from a manifest. */
+  readonly healthCanary?: HealthCanarySpec;
   /** Whether this service is invokable. */
   readonly invokable: boolean;
   /** Reason for the invokable state (null when invokable is true). */

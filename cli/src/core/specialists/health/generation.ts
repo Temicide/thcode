@@ -40,6 +40,8 @@ export function specialistConfigurationDigest(fields: {
   adapterVersion: string;
   transportPolicy: SpecialistTransportPolicy;
   requestConfig: SpecialistRequestConfig;
+  /** Explicit retests bind a fresh opaque generation nonce. */
+  generationNonce?: string;
 }): string {
   const hash = createHash('sha256');
   hash.update(fields.endpoint);
@@ -61,6 +63,10 @@ export function specialistConfigurationDigest(fields: {
   hash.update(JSON.stringify(fields.transportPolicy));
   hash.update('\x00');
   hash.update(JSON.stringify(fields.requestConfig));
+  if (fields.generationNonce !== undefined) {
+    hash.update('\x00');
+    hash.update(fields.generationNonce);
+  }
   return hash.digest('hex');
 }
 
@@ -81,6 +87,7 @@ export function buildSpecialistEffectiveConfiguration(
   credentialReference: AiForThaiCredentialReference | null,
   requestConfig: SpecialistRequestConfig = DEFAULT_REQUEST_CONFIG,
   clock: () => string = () => new Date().toISOString(),
+  generationNonce?: string,
 ): SpecialistGenerationResult {
   // 1. Non-invokable check.
   if (!entry.invokable) {
@@ -186,6 +193,7 @@ export function buildSpecialistEffectiveConfiguration(
     adapterVersion: entry.adapterVersion,
     transportPolicy,
     requestConfig,
+    generationNonce,
   };
 
   const digest = specialistConfigurationDigest(digestFields);

@@ -188,6 +188,80 @@ export class HealthRegistry {
     return this.snapshot(providerId);
   }
 
+  /**
+   * Check a credential-coupled group without exposing a partial `available`
+   * state. Every member enters `checking`, all probes finish, then availability
+   * is committed together only when each current generation passed (AD-18).
+   */
+  async checkAtomically(providerIds: readonly string[]): Promise<HealthSnapshot[]> {
+    const records = providerIds.map((providerId) => this.records.get(providerId));
+    if (records.some((record) => record === undefined)) {
+      return providerIds.map((providerId) => this.snapshot(providerId));
+    }
+    const resolvedRecords = records as HealthRecord[];
+    const probes = providerIds.map((providerId) => this.probes.get(providerId));
+    if (probes.some((probe) => probe === undefined)) {
+      return providerIds.map((providerId) => this.snapshot(providerId));
+    }
+    const resolvedProbes = probes as HealthProbe[];
+    const generations = resolvedRecords.map((record) => record.generation);
+    for (const record of resolvedRecords) record.state = 'checking';
+
+    const results = await Promise.all(resolvedProbes.map(async (probe, index): Promise<HealthProbeResult> => {
+      try {
+        return await probe(generations[index]!);
+      } catch {
+        const generation = generations[index]!;
+        return {
+          ok: false,
+          failure: {
+            category: 'unknown',
+            retryable: false,
+            scope: generation.providerId,
+            generationId: generation.id,
+            safeMessage: 'Probe threw before returning a typed result.',
+            causeCode: 'probe-threw',
+          },
+        };
+      }
+    }));
+
+    const currentRecords = providerIds.map((providerId) => this.records.get(providerId));
+    if (currentRecords.some((record, index) => !record || record.generation.id !== generations[index]!.id)) {
+      return providerIds.map((providerId) => this.snapshot(providerId));
+    }
+    const current = currentRecords as HealthRecord[];
+    const allPassed = results.every((result) => result.ok);
+    const checkedAt = this.clock();
+    for (let index = 0; index < current.length; index++) {
+      const record = current[index]!;
+      const result = results[index]!;
+      if (allPassed) {
+        record.state = 'available';
+        (record as { evidence?: string }).evidence = (result as Extract<HealthProbeResult, { ok: true }>).evidence;
+        (record as { failure?: HealthFailure }).failure = undefined;
+      } else if (!result.ok) {
+        const fatal = result.failure.category === 'auth' || result.failure.category === 'configuration' || result.failure.category === 'protocol';
+        record.state = fatal ? 'unhealthy' : 'unavailable';
+        (record as { failure?: HealthFailure }).failure = result.failure;
+        (record as { evidence?: string }).evidence = undefined;
+      } else {
+        record.state = 'unavailable';
+        (record as { failure?: HealthFailure }).failure = {
+          category: 'unknown',
+          retryable: false,
+          scope: record.generation.providerId,
+          generationId: record.generation.id,
+          safeMessage: 'A credential-coupled health probe did not pass atomically.',
+          causeCode: 'group-probe-failed',
+        };
+        (record as { evidence?: string }).evidence = undefined;
+      }
+      (record as { checkedAt: string }).checkedAt = checkedAt;
+    }
+    return providerIds.map((providerId) => this.snapshot(providerId));
+  }
+
   /** Quarantine a provider (e.g. shared credential rejected). The provider
    * stays unselectable until an explicit retest passes. */
   quarantine(providerId: string, cause: string): HealthSnapshot {
