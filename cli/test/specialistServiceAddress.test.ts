@@ -754,7 +754,7 @@ describe('ExtractAddressSpecialistHandler', () => {
     const { defaultSpecialistHandlers } = await import('../src/core/specialists/services/index.js');
     const handlers = defaultSpecialistHandlers();
 
-    expect(handlers).toHaveLength(3);
+    expect(handlers).toHaveLength(4);
     expect(handlers.find(h => h.serviceId === 'extract-address')).toBeDefined();
 
     // Verify the handler works through the adapter

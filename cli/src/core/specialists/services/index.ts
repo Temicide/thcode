@@ -4,6 +4,7 @@
 import { TocrSpecialistHandler } from './tocr/index.js';
 import { SpeechToTextSpecialistHandler } from './speech/index.js';
 import { ExtractAddressSpecialistHandler } from './address/index.js';
+import { NerSpecialistHandler } from './ner/index.js';
 import type { SpecialistServiceHandler } from '../adapter/types.js';
 
 /**
@@ -15,9 +16,11 @@ export function defaultSpecialistHandlers(): readonly SpecialistServiceHandler[]
     new TocrSpecialistHandler(),
     new SpeechToTextSpecialistHandler(),
     new ExtractAddressSpecialistHandler(),
+    new NerSpecialistHandler(),
   ];
 }
 
 export { TocrSpecialistHandler } from './tocr/index.js';
 export { SpeechToTextSpecialistHandler } from './speech/index.js';
 export { ExtractAddressSpecialistHandler } from './address/index.js';
+export { NerSpecialistHandler } from './ner/index.js';

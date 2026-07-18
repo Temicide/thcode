@@ -1,8 +1,7 @@
-// Unit tests for Story 4.10: T-OCR Specialist Service handler.
+// Unit tests for Story 4.13: Named Entity Recognition Specialist Service handler.
 // Offline tests using InMemorySpecialistTransport. Covers every I/O matrix row + AC.
 
 import { describe, it, expect, beforeEach } from 'vitest';
-import { randomUUID } from 'node:crypto';
 import {
   SharedSpecialistAdapter,
   InMemorySpecialistTransport,
@@ -17,26 +16,30 @@ import {
   type SpecialistInvocation,
   type CredentialScope,
 } from '../src/core/specialists/adapter/index.js';
-import { TocrSpecialistHandler } from '../src/core/specialists/services/tocr/index.js';
+import { NerSpecialistHandler } from '../src/core/specialists/services/ner/index.js';
 import {
-  FIXTURE_PNG_BYTES,
-  EXPECTED_TEXT,
+  FIXTURE_NER_TEXT,
+  EXPECTED_ENTITY_PERSON,
+  EXPECTED_ENTITY_ORG,
+  EXPECTED_ENTITY_LOC,
+  EXPECTED_ENTITY_PERSON2,
+  EXPECTED_ENTITY_LOC2,
+  EXPECTED_ENTITIES,
   EXPECTED_CONFIDENCE,
-  EXPECTED_WORDS,
-  buildTocrResponse,
-} from '../src/core/specialists/services/tocr/index.js';
+  buildNerResponse,
+} from '../src/core/specialists/services/ner/index.js';
 import type { CapabilityRegistryEntry } from '../src/core/specialists/registry/types.js';
+import type { NerResponse } from '../src/core/specialists/services/ner/fixture.js';
 import type { SpecialistHealthSnapshot, SpecialistEffectiveConfiguration } from '../src/core/specialists/health/types.js';
 import type { PreparedPayloadManifest, ConsentReference } from '../src/core/specialists/consent/index.js';
 import type { PreparedArtifact } from '../src/core/specialists/artifacts/types.js';
 import { CoreApp } from '../src/core/app.js';
-import type { SpecialistTransport } from '../src/core/specialists/adapter/index.js';
 
 // ---------------------------------------------------------------------------
 // Constants
 // ---------------------------------------------------------------------------
 
-const SERVICE_ID = 't-ocr';
+const SERVICE_ID = 'named-entity-recognition';
 const STUB_SECRET_KEY = 'sk-test-secret-key-1234567890abcdef';
 
 // ---------------------------------------------------------------------------
@@ -58,14 +61,14 @@ function advanceClock(ms: number): void {
 
 function makeConfig(overrides?: Partial<SpecialistEffectiveConfiguration>): SpecialistEffectiveConfiguration {
   return {
-    id: 'specialist-gen-tocr-001',
+    id: 'specialist-gen-ner-001',
     serviceId: SERVICE_ID,
-    endpoint: 'https://api.aiforthai.in.th/t-ocr/v1',
+    endpoint: 'https://api.aiforthai.in.th/ner/v1',
     origin: 'aiforthai',
-    serviceMapping: 't-ocr',
+    serviceMapping: 'named-entity-recognition',
     credentialReferenceId: 'aiforthai',
     credentialRevision: 'rev-1',
-    credentialFingerprint: 'fp-tocr-001',
+    credentialFingerprint: 'fp-ner-001',
     manifestVersion: 1,
     contractVersion: '1.0.0',
     adapterVersion: '1.0.0',
@@ -86,17 +89,17 @@ function makeConfig(overrides?: Partial<SpecialistEffectiveConfiguration>): Spec
 function makeRegistryEntry(overrides?: Partial<CapabilityRegistryEntry>): CapabilityRegistryEntry {
   return {
     id: SERVICE_ID,
-    upstreamId: 'aiforthai-t-ocr',
-    nameThai: 'ที-โอซีอาร์',
-    nameEnglish: 'T-OCR',
-    searchTerms: ['ocr', 'thai', 'optical character recognition'],
-    capabilities: ['ocr'],
-    supportedInputs: ['image/png', 'image/jpeg'],
+    upstreamId: 'aiforthai-ner',
+    nameThai: 'การรู้จำเอนทิตี',
+    nameEnglish: 'Named Entity Recognition',
+    searchTerms: ['ner', 'entity', 'recognition', 'thai', 'name', 'organization', 'location'],
+    capabilities: ['named-entity-recognition'],
+    supportedInputs: ['text/plain', 'text/markdown'],
     inputLimits: { maxFileSize: '10MB' },
     entitlement: 'ai-for-thai',
     evidenceLevel: 'full',
     observationDate: '2026-07-18',
-    endpoint: 'https://api.aiforthai.in.th/t-ocr/v1',
+    endpoint: 'https://api.aiforthai.in.th/ner/v1',
     transportRules: {
       allowedProtocols: ['https'],
       requiresTls: true,
@@ -134,8 +137,8 @@ function makeHealthSnapshot(overrides?: Partial<SpecialistHealthSnapshot>): Spec
   return {
     serviceId: SERVICE_ID,
     state: 'available',
-    generationId: 'specialist-gen-tocr-001',
-    endpoint: 'https://api.aiforthai.in.th/t-ocr/v1',
+    generationId: 'specialist-gen-ner-001',
+    endpoint: 'https://api.aiforthai.in.th/ner/v1',
     checkedAt: '2026-07-18T12:00:00.000Z',
     ...overrides,
   };
@@ -144,66 +147,66 @@ function makeHealthSnapshot(overrides?: Partial<SpecialistHealthSnapshot>): Spec
 function makeManifest(overrides?: Partial<PreparedPayloadManifest>): PreparedPayloadManifest {
   return {
     manifestVersion: 1,
-    sources: [{ identity: '@receipt.png', sourceHash: 'png-hash-001', mediaType: 'image/png', sizeBytes: FIXTURE_PNG_BYTES.length }],
+    sources: [{ identity: '@notes.md', sourceHash: 'md-hash-001', mediaType: 'text/plain', sizeBytes: FIXTURE_NER_TEXT.length }],
     classification: 'public',
-    purpose: 'OCR processing',
+    purpose: 'Extract named entities from Thai text',
     transformation: { redactSecrets: true, extractTextOnly: true, stripActiveContent: true, reason: 'standard' },
-    recipient: { capabilityId: SERVICE_ID, capabilityVersion: '1.0.0', verifiedEndpoint: 'https://api.aiforthai.in.th/t-ocr/v1', method: 'POST' },
+    recipient: { capabilityId: SERVICE_ID, capabilityVersion: '1.0.0', verifiedEndpoint: 'https://api.aiforthai.in.th/ner/v1', method: 'POST' },
     callCount: 1,
     retention: 'upstream-no-retention-verified',
-    operationId: 'op-tocr-001',
+    operationId: 'op-ner-001',
     promptRoundId: 'round-1',
     expiresAt: null,
-    manifestDigest: 'manifest-digest-tocr-001',
-    payloadByteDigest: 'payload-digest-tocr-001',
+    manifestDigest: 'manifest-digest-ner-001',
+    payloadByteDigest: 'payload-digest-ner-001',
     ...overrides,
   };
 }
 
 function makeConsentReference(overrides?: Partial<ConsentReference>): ConsentReference {
   return {
-    consentId: 'consent-tocr-001',
-    manifestDigest: 'manifest-digest-tocr-001',
-    payloadByteDigest: 'payload-digest-tocr-001',
+    consentId: 'consent-ner-001',
+    manifestDigest: 'manifest-digest-ner-001',
+    payloadByteDigest: 'payload-digest-ner-001',
     recipientCapabilityId: SERVICE_ID,
     recipientCapabilityVersion: '1.0.0',
-    verifiedEndpoint: 'https://api.aiforthai.in.th/t-ocr/v1',
-    purpose: 'OCR processing',
+    verifiedEndpoint: 'https://api.aiforthai.in.th/ner/v1',
+    purpose: 'Extract named entities from Thai text',
     grantedAt: '2026-07-18T12:00:00.000Z',
     expiresAt: null,
     ...overrides,
   };
 }
 
-function makeImageArtifact(overrides?: Partial<PreparedArtifact>): PreparedArtifact {
+function makeTextArtifact(overrides?: Partial<PreparedArtifact>): PreparedArtifact {
   return {
-    reference: { raw: '@receipt.png', canonical: '/workspace/receipt.png' },
-    sourceIdentity: { path: '/workspace/receipt.png', workspaceRoot: '/workspace', relativePath: 'receipt.png', digest: 'png-hash-001', version: null, platform: 'darwin', volume: 'test-vol', binding: 'bound' },
-    mediaType: 'image/png',
-    sizeBytes: FIXTURE_PNG_BYTES.length,
-    contentHash: 'content-hash-png-001',
-    contentKind: 'bytes',
-    bytes: FIXTURE_PNG_BYTES,
+    reference: { raw: '@notes.md', canonical: '/workspace/notes.md' },
+    sourceIdentity: { path: '/workspace/notes.md', workspaceRoot: '/workspace', relativePath: 'notes.md', digest: 'md-hash-001', version: null, platform: 'darwin', volume: 'test-vol', binding: 'bound' },
+    mediaType: 'text/plain',
+    sizeBytes: FIXTURE_NER_TEXT.length,
+    contentHash: 'content-hash-ner-001',
+    contentKind: 'text',
+    text: FIXTURE_NER_TEXT,
     transformations: [],
     privacyClassification: 'public',
-    compatibility: { status: 'compatible', matchedInput: 'image/png' },
+    compatibility: { status: 'compatible', matchedInput: 'text/plain' },
     createdAt: '2026-07-18T12:00:00.000Z',
     ...overrides,
   };
 }
 
-function makeTextArtifact(overrides?: Partial<PreparedArtifact>): PreparedArtifact {
+function makeExtractedTextArtifact(overrides?: Partial<PreparedArtifact>): PreparedArtifact {
   return {
-    reference: { raw: '@note.txt', canonical: '/workspace/note.txt' },
-    sourceIdentity: { path: '/workspace/note.txt', workspaceRoot: '/workspace', relativePath: 'note.txt', digest: 'txt-hash-001', version: null, platform: 'darwin', volume: 'test-vol', binding: 'bound' },
-    mediaType: 'text/plain',
-    sizeBytes: 50,
-    contentHash: 'content-hash-txt-001',
+    reference: { raw: '@notes.md', canonical: '/workspace/notes.md' },
+    sourceIdentity: { path: '/workspace/notes.md', workspaceRoot: '/workspace', relativePath: 'notes.md', digest: 'md-hash-001', version: null, platform: 'darwin', volume: 'test-vol', binding: 'bound' },
+    mediaType: 'text/markdown',
+    sizeBytes: FIXTURE_NER_TEXT.length,
+    contentHash: 'content-hash-ner-extracted-001',
     contentKind: 'text',
-    text: 'Hello, world!',
-    transformations: [],
+    extractedText: FIXTURE_NER_TEXT,
+    transformations: [{ type: 'extract-text', description: 'Markdown text extraction' }],
     privacyClassification: 'public',
-    compatibility: { status: 'compatible', matchedInput: 'text/plain' },
+    compatibility: { status: 'compatible', matchedInput: 'text/markdown' },
     createdAt: '2026-07-18T12:00:00.000Z',
     ...overrides,
   };
@@ -213,7 +216,7 @@ function makeRequest(overrides?: Partial<SpecialistRequest>): SpecialistRequest 
   const config = makeConfig();
   const manifest = makeManifest();
   const consentRef = makeConsentReference();
-  const artifacts = [makeImageArtifact()];
+  const artifacts = [makeTextArtifact()];
   return {
     serviceId: SERVICE_ID,
     contractVersion: '1.0.0',
@@ -221,7 +224,7 @@ function makeRequest(overrides?: Partial<SpecialistRequest>): SpecialistRequest 
     effectiveConfiguration: config,
     preparedManifest: manifest,
     consentReference: consentRef,
-    operationId: 'op-tocr-001',
+    operationId: 'op-ner-001',
     preparedArtifacts: artifacts,
     options: { timeoutMs: 30000, maxRetries: 0 },
     startedAt: clock(),
@@ -275,7 +278,7 @@ function rawResponse(overrides: Partial<SpecialistRawResponse> & { status: numbe
 // Tests
 // ---------------------------------------------------------------------------
 
-describe('TocrSpecialistHandler', () => {
+describe('NerSpecialistHandler', () => {
   let transport: InMemorySpecialistTransport;
   let adapter: SharedSpecialistAdapter;
 
@@ -286,17 +289,17 @@ describe('TocrSpecialistHandler', () => {
       transport,
       clock,
       resolveRawKey: async () => STUB_SECRET_KEY,
-      handlers: [new TocrSpecialistHandler()],
+      handlers: [new NerSpecialistHandler()],
     });
   });
 
   // -----------------------------------------------------------------------
-  // 1. Happy path image
+  // 1. Happy path — entities with offsets
   // -----------------------------------------------------------------------
 
-  it('should return a SpecialistResult with full attribution for a valid image request', async () => {
+  it('should return a SpecialistResult with all entities for a valid text request', async () => {
     transport.registerDefaultResponder((_req) =>
-      successResponse(buildTocrResponse()),
+      successResponse(buildNerResponse()),
     );
 
     const request = makeRequest();
@@ -310,17 +313,40 @@ describe('TocrSpecialistHandler', () => {
 
     const r = result as SpecialistResult;
     expect(r.serviceId).toBe(SERVICE_ID);
-    expect(r.serviceIdentity.nameEnglish).toBe('T-OCR');
-    expect(r.serviceIdentity.nameThai).toBe('ที-โอซีอาร์');
-    expect(r.configurationGenerationId).toBe('specialist-gen-tocr-001');
-    expect(r.consentReference.consentId).toBe('consent-tocr-001');
-    expect(r.sourceContentHash).toBe('payload-digest-tocr-001');
+    expect(r.serviceIdentity.nameEnglish).toBe('Named Entity Recognition');
+    expect(r.serviceIdentity.nameThai).toBe('การรู้จำเอนทิตี');
+    expect(r.configurationGenerationId).toBe('specialist-gen-ner-001');
+    expect(r.consentReference.consentId).toBe('consent-ner-001');
+    expect(r.sourceContentHash).toBe('payload-digest-ner-001');
 
-    // Check recognizedText field
-    expect(r.fields.recognizedText).toBeDefined();
-    expect(r.fields.recognizedText!.kind).toBe('text');
-    expect(r.fields.recognizedText!.value).toBe(EXPECTED_TEXT);
-    expect(r.fields.recognizedText!.present).toBe(true);
+    // Check entities field (structured — wrapped in { items: [...] })
+    expect(r.fields.entities).toBeDefined();
+    expect(r.fields.entities!.kind).toBe('structured');
+    expect(r.fields.entities!.present).toBe(true);
+    const entitiesValue = r.fields.entities!.value as Readonly<Record<string, unknown>>;
+    const entities = entitiesValue.items as readonly Record<string, unknown>[];
+    expect(entities).toHaveLength(EXPECTED_ENTITIES.length);
+
+    // Verify verbatim content with offsets preserved
+    expect(entities[0].text).toBe(EXPECTED_ENTITY_PERSON.text);
+    expect(entities[0].label).toBe(EXPECTED_ENTITY_PERSON.label);
+    expect(entities[0].offset).toBe(EXPECTED_ENTITY_PERSON.offset);
+
+    expect(entities[1].text).toBe(EXPECTED_ENTITY_ORG.text);
+    expect(entities[1].label).toBe(EXPECTED_ENTITY_ORG.label);
+    expect(entities[1].offset).toBe(EXPECTED_ENTITY_ORG.offset);
+
+    expect(entities[2].text).toBe(EXPECTED_ENTITY_LOC.text);
+    expect(entities[2].label).toBe(EXPECTED_ENTITY_LOC.label);
+    expect(entities[2].offset).toBe(EXPECTED_ENTITY_LOC.offset);
+
+    expect(entities[3].text).toBe(EXPECTED_ENTITY_PERSON2.text);
+    expect(entities[3].label).toBe(EXPECTED_ENTITY_PERSON2.label);
+    expect(entities[3].offset).toBe(EXPECTED_ENTITY_PERSON2.offset);
+
+    expect(entities[4].text).toBe(EXPECTED_ENTITY_LOC2.text);
+    expect(entities[4].label).toBe(EXPECTED_ENTITY_LOC2.label);
+    expect(entities[4].offset).toBe(EXPECTED_ENTITY_LOC2.offset);
 
     // Check confidence field
     expect(r.fields.confidence).toBeDefined();
@@ -328,16 +354,9 @@ describe('TocrSpecialistHandler', () => {
     expect(r.fields.confidence!.value).toBe(EXPECTED_CONFIDENCE);
     expect(r.fields.confidence!.present).toBe(true);
 
-    // Check words field
-    expect(r.fields.words).toBeDefined();
-    expect(r.fields.words!.kind).toBe('list');
-    expect(r.fields.words!.value).toEqual([...EXPECTED_WORDS]);
-    expect(r.fields.words!.present).toBe(true);
-
     // Check emptyFields excludes present fields
-    expect(r.emptyFields).not.toContain('recognizedText');
+    expect(r.emptyFields).not.toContain('entities');
     expect(r.emptyFields).not.toContain('confidence');
-    expect(r.emptyFields).not.toContain('words');
 
     // Check confidence at top level
     expect(r.confidence).toBe(EXPECTED_CONFIDENCE);
@@ -348,7 +367,7 @@ describe('TocrSpecialistHandler', () => {
     expect(r.timing.elapsedMs).toBeGreaterThanOrEqual(0);
 
     // Check provenance
-    expect(r.provenance.endpoint).toBe('https://api.aiforthai.in.th/t-ocr/v1');
+    expect(r.provenance.endpoint).toBe('https://api.aiforthai.in.th/ner/v1');
     expect(r.provenance.method).toBe('POST');
     expect(r.provenance.status).toBe(200);
 
@@ -359,12 +378,17 @@ describe('TocrSpecialistHandler', () => {
   });
 
   // -----------------------------------------------------------------------
-  // 2. Response missing confidence
+  // 2. Entities without offsets
   // -----------------------------------------------------------------------
 
-  it('should mark confidence as present:false when response omits confidence', async () => {
+  it('should keep entities verbatim when offsets are not provided', async () => {
     transport.registerDefaultResponder((_req) =>
-      successResponse(buildTocrResponse({ confidence: undefined })),
+      successResponse(buildNerResponse({
+        entities: [
+          { text: 'สมชาย ใจดี', label: 'PERSON' },
+          { text: 'ไทยเทค จำกัด', label: 'ORGANIZATION' },
+        ],
+      })),
     );
 
     const request = makeRequest();
@@ -376,13 +400,44 @@ describe('TocrSpecialistHandler', () => {
     expect((result as SpecialistResult).ok).toBe(true);
     const r = result as SpecialistResult;
 
-    // recognizedText should be present
-    expect(r.fields.recognizedText).toBeDefined();
-    expect(r.fields.recognizedText!.present).toBe(true);
+    expect(r.fields.entities).toBeDefined();
+    expect(r.fields.entities!.kind).toBe('structured');
+    expect(r.fields.entities!.present).toBe(true);
+    const entitiesValue = r.fields.entities!.value as Readonly<Record<string, unknown>>;
+    const entities = entitiesValue.items as readonly Record<string, unknown>[];
+    expect(entities).toHaveLength(2);
 
-    // words should be present
-    expect(r.fields.words).toBeDefined();
-    expect(r.fields.words!.present).toBe(true);
+    // Entities kept verbatim — no offset field fabricated
+    expect(entities[0].text).toBe('สมชาย ใจดี');
+    expect(entities[0].label).toBe('PERSON');
+    expect(entities[0]).not.toHaveProperty('offset');
+
+    expect(entities[1].text).toBe('ไทยเทค จำกัด');
+    expect(entities[1].label).toBe('ORGANIZATION');
+    expect(entities[1]).not.toHaveProperty('offset');
+  });
+
+  // -----------------------------------------------------------------------
+  // 3. Missing confidence
+  // -----------------------------------------------------------------------
+
+  it('should mark confidence as present:false when response omits confidence', async () => {
+    transport.registerDefaultResponder((_req) =>
+      successResponse(buildNerResponse({ confidence: undefined })),
+    );
+
+    const request = makeRequest();
+    const entry = makeRegistryEntry();
+    const health = makeHealthSnapshot();
+
+    const result = await adapter.invoke(request, entry, health);
+
+    expect((result as SpecialistResult).ok).toBe(true);
+    const r = result as SpecialistResult;
+
+    // Entities should be present
+    expect(r.fields.entities).toBeDefined();
+    expect(r.fields.entities!.present).toBe(true);
 
     // confidence should be absent
     expect(r.fields.confidence).toBeDefined();
@@ -392,20 +447,19 @@ describe('TocrSpecialistHandler', () => {
 
     // confidence should be in emptyFields
     expect(r.emptyFields).toContain('confidence');
-    expect(r.emptyFields).not.toContain('recognizedText');
-    expect(r.emptyFields).not.toContain('words');
+    expect(r.emptyFields).not.toContain('entities');
 
     // Top-level confidence should be undefined
     expect(r.confidence).toBeUndefined();
   });
 
   // -----------------------------------------------------------------------
-  // 3. Response missing words
+  // 4. Empty entities (present:false, no fabrication)
   // -----------------------------------------------------------------------
 
-  it('should mark words as present:false when response omits words', async () => {
+  it('should mark entities as present:false when entities array is empty', async () => {
     transport.registerDefaultResponder((_req) =>
-      successResponse(buildTocrResponse({ words: undefined })),
+      successResponse(buildNerResponse({ entities: [] })),
     );
 
     const request = makeRequest();
@@ -417,33 +471,33 @@ describe('TocrSpecialistHandler', () => {
     expect((result as SpecialistResult).ok).toBe(true);
     const r = result as SpecialistResult;
 
-    // recognizedText should be present
-    expect(r.fields.recognizedText).toBeDefined();
-    expect(r.fields.recognizedText!.present).toBe(true);
+    expect(r.fields.entities).toBeDefined();
+    expect(r.fields.entities!.kind).toBe('structured');
+    expect(r.fields.entities!.value).toEqual({});
+    expect(r.fields.entities!.present).toBe(false);
+    expect(r.emptyFields).toContain('entities');
 
-    // confidence should be present
-    expect(r.fields.confidence).toBeDefined();
-    expect(r.fields.confidence!.present).toBe(true);
-
-    // words should be absent
-    expect(r.fields.words).toBeDefined();
-    expect(r.fields.words!.kind).toBe('list');
-    expect(r.fields.words!.value).toEqual([]);
-    expect(r.fields.words!.present).toBe(false);
-
-    // words should be in emptyFields
-    expect(r.emptyFields).toContain('words');
-    expect(r.emptyFields).not.toContain('recognizedText');
-    expect(r.emptyFields).not.toContain('confidence');
+    // No fabricated entities
+    const entitiesValue = r.fields.entities!.value as Readonly<Record<string, unknown>>;
+    expect(entitiesValue.items).toBeUndefined();
   });
 
   // -----------------------------------------------------------------------
-  // 4. Empty result text
+  // 5. Mixed valid+invalid entities (valid kept, invalid dropped)
   // -----------------------------------------------------------------------
 
-  it('should mark recognizedText as present:false when result is empty string', async () => {
+  it('should keep valid entities and drop invalid ones from a mixed array', async () => {
     transport.registerDefaultResponder((_req) =>
-      successResponse(buildTocrResponse({ result: '' })),
+      successResponse(buildNerResponse({
+        entities: [
+          { text: 'สมชาย ใจดี', label: 'PERSON', offset: 3 },
+          'invalid-string-element',
+          { text: 12345, label: 'NUMBER' },
+          { text: 'ไทยเทค จำกัด', label: 'ORGANIZATION', offset: 28 },
+          null,
+          { text: '', label: 'EMPTY' },
+        ],
+      })),
     );
 
     const request = makeRequest();
@@ -455,21 +509,28 @@ describe('TocrSpecialistHandler', () => {
     expect((result as SpecialistResult).ok).toBe(true);
     const r = result as SpecialistResult;
 
-    // recognizedText should be present:false (empty)
-    expect(r.fields.recognizedText).toBeDefined();
-    expect(r.fields.recognizedText!.kind).toBe('text');
-    expect(r.fields.recognizedText!.value).toBe('');
-    expect(r.fields.recognizedText!.present).toBe(false);
-
-    // recognizedText should be in emptyFields
-    expect(r.emptyFields).toContain('recognizedText');
-
-    // No fabricated text
-    expect(r.fields.recognizedText!.value).not.toBe(EXPECTED_TEXT);
+    expect(r.fields.entities).toBeDefined();
+    expect(r.fields.entities!.kind).toBe('structured');
+    expect(r.fields.entities!.present).toBe(true);
+    const entitiesValue = r.fields.entities!.value as Readonly<Record<string, unknown>>;
+    const entities = entitiesValue.items as readonly Record<string, unknown>[];
+    // Valid entities: {text:'สมชาย ใจดี',label:'PERSON'}, {text:'ไทยเทค จำกัด',label:'ORGANIZATION'}, {text:'',label:'EMPTY'}
+    // Invalid: 'invalid-string-element' (not object), {text:12345,label:'NUMBER'} (text not string), null
+    expect(entities).toHaveLength(3);
+    expect(entities[0].text).toBe('สมชาย ใจดี');
+    expect(entities[0].label).toBe('PERSON');
+    expect(entities[0].offset).toBe(3);
+    expect(entities[1].text).toBe('ไทยเทค จำกัด');
+    expect(entities[1].label).toBe('ORGANIZATION');
+    expect(entities[1].offset).toBe(28);
+    // Empty string text is still a string — kept verbatim
+    expect(entities[2].text).toBe('');
+    expect(entities[2].label).toBe('EMPTY');
+    expect(r.emptyFields).not.toContain('entities');
   });
 
   // -----------------------------------------------------------------------
-  // 5. Malformed response body
+  // 6. Malformed response body
   // -----------------------------------------------------------------------
 
   it('should return malformed-response failure for non-JSON body', async () => {
@@ -522,14 +583,25 @@ describe('TocrSpecialistHandler', () => {
   });
 
   // -----------------------------------------------------------------------
-  // 6. No image bytes (text artifact)
+  // 7. No text artifact
   // -----------------------------------------------------------------------
 
-  it('should return unknown-outcome failure when artifact has no image bytes', async () => {
-    // Create a request with a text artifact (no bytes) but with a supported
-    // media type so it passes validation.
-    const textArtifact = makeTextArtifact({ mediaType: 'image/png' });
-    const request = makeRequest({ preparedArtifacts: [textArtifact] });
+  it('should return unknown-outcome failure when artifact has no text or extractedText', async () => {
+    // Create a request with a text/plain artifact that has no text or extractedText
+    const noTextArtifact: PreparedArtifact = {
+      reference: { raw: '@notes.md', canonical: '/workspace/notes.md' },
+      sourceIdentity: { path: '/workspace/notes.md', workspaceRoot: '/workspace', relativePath: 'notes.md', digest: 'md-hash-001', version: null, platform: 'darwin', volume: 'test-vol', binding: 'bound' },
+      mediaType: 'text/plain',
+      sizeBytes: 0,
+      contentHash: 'content-hash-empty-001',
+      contentKind: 'text',
+      text: '',
+      transformations: [],
+      privacyClassification: 'public',
+      compatibility: { status: 'compatible', matchedInput: 'text/plain' },
+      createdAt: '2026-07-18T12:00:00.000Z',
+    };
+    const request = makeRequest({ preparedArtifacts: [noTextArtifact] });
     const entry = makeRegistryEntry();
     const health = makeHealthSnapshot();
 
@@ -542,7 +614,7 @@ describe('TocrSpecialistHandler', () => {
   });
 
   // -----------------------------------------------------------------------
-  // 7. Transport timeout
+  // 8. Transport timeout
   // -----------------------------------------------------------------------
 
   it('should return timeout failure for transport timeout', async () => {
@@ -561,7 +633,7 @@ describe('TocrSpecialistHandler', () => {
   });
 
   // -----------------------------------------------------------------------
-  // 8. Unauthorized 401
+  // 9. Unauthorized 401
   // -----------------------------------------------------------------------
 
   it('should return unauthorized failure for HTTP 401', async () => {
@@ -580,7 +652,42 @@ describe('TocrSpecialistHandler', () => {
   });
 
   // -----------------------------------------------------------------------
-  // 9. Raw key never leaks
+  // 10. Non-finite confidence (1e999 → present:false)
+  // -----------------------------------------------------------------------
+
+  it('should mark confidence as present:false when confidence is non-finite (1e999)', async () => {
+    transport.registerDefaultResponder((_req) =>
+      successResponse(buildNerResponse({ confidence: 1e999 })),
+    );
+
+    const request = makeRequest();
+    const entry = makeRegistryEntry();
+    const health = makeHealthSnapshot();
+
+    const result = await adapter.invoke(request, entry, health);
+
+    expect((result as SpecialistResult).ok).toBe(true);
+    const r = result as SpecialistResult;
+
+    // Entities should be present
+    expect(r.fields.entities).toBeDefined();
+    expect(r.fields.entities!.present).toBe(true);
+
+    // confidence should be absent (Infinity not stored)
+    expect(r.fields.confidence).toBeDefined();
+    expect(r.fields.confidence!.kind).toBe('number');
+    expect(r.fields.confidence!.value).toBeNull();
+    expect(r.fields.confidence!.present).toBe(false);
+
+    // confidence should be in emptyFields
+    expect(r.emptyFields).toContain('confidence');
+
+    // Top-level confidence should be undefined
+    expect(r.confidence).toBeUndefined();
+  });
+
+  // -----------------------------------------------------------------------
+  // 11. Raw key never leaks
   // -----------------------------------------------------------------------
 
   it('should never leak the raw key in transport request headersSummary, result, or failure', async () => {
@@ -590,7 +697,7 @@ describe('TocrSpecialistHandler', () => {
     transport.registerDefaultResponder((req) => {
       capturedHeadersSummary = req.headersSummary;
       capturedFetchHeaders = req.fetchHeaders;
-      return successResponse(buildTocrResponse());
+      return successResponse(buildNerResponse());
     });
 
     const request = makeRequest();
@@ -622,20 +729,25 @@ describe('TocrSpecialistHandler', () => {
   });
 
   // -----------------------------------------------------------------------
-  // 10. Handler registered via defaultSpecialistHandlers
+  // 12. Handler registered via defaultSpecialistHandlers (by serviceId, not index)
   // -----------------------------------------------------------------------
 
-  it('should be registered in defaultSpecialistHandlers and resolvable by the adapter', async () => {
+  it('should be registered in defaultSpecialistHandlers and resolvable by the adapter via find by serviceId', async () => {
     const { defaultSpecialistHandlers } = await import('../src/core/specialists/services/index.js');
     const handlers = defaultSpecialistHandlers();
 
+    // Assert count is 4 (all launch services wired)
     expect(handlers).toHaveLength(4);
-    expect(handlers[0].serviceId).toBe(SERVICE_ID);
+
+    // Find by serviceId — NOT by index
+    const nerHandler = handlers.find(h => h.serviceId === 'named-entity-recognition');
+    expect(nerHandler).toBeDefined();
+    expect(nerHandler!.serviceId).toBe('named-entity-recognition');
 
     // Verify the handler works through the adapter
     const testTransport = new InMemorySpecialistTransport();
     testTransport.registerDefaultResponder((_req) =>
-      successResponse(buildTocrResponse()),
+      successResponse(buildNerResponse()),
     );
 
     const testAdapter = new SharedSpecialistAdapter({
@@ -654,28 +766,12 @@ describe('TocrSpecialistHandler', () => {
     expect((result as SpecialistResult).ok).toBe(true);
     const r = result as SpecialistResult;
     expect(r.serviceId).toBe(SERVICE_ID);
-    expect(r.fields.recognizedText).toBeDefined();
-    expect(r.fields.recognizedText!.present).toBe(true);
-    expect(r.fields.recognizedText!.value).toBe(EXPECTED_TEXT);
+    expect(r.fields.entities).toBeDefined();
+    expect(r.fields.entities!.present).toBe(true);
   });
 
   // -----------------------------------------------------------------------
-  // 11. App test seam: setSpecialistTransportForTest
-  // -----------------------------------------------------------------------
-
-  it('should accept a transport override via setSpecialistTransportForTest', () => {
-    const app = new CoreApp({ clock });
-    const testTransport = new InMemorySpecialistTransport();
-
-    // The method should not throw
-    expect(() => app.setSpecialistTransportForTest(testTransport)).not.toThrow();
-
-    // Calling it again with null should also work
-    expect(() => app.setSpecialistTransportForTest(testTransport)).not.toThrow();
-  });
-
-  // -----------------------------------------------------------------------
-  // Transport network error
+  // 13. Transport network error
   // -----------------------------------------------------------------------
 
   it('should return transport failure for network error', async () => {
@@ -694,7 +790,7 @@ describe('TocrSpecialistHandler', () => {
   });
 
   // -----------------------------------------------------------------------
-  // HTTP 403
+  // 14. HTTP 403
   // -----------------------------------------------------------------------
 
   it('should return forbidden failure for HTTP 403', async () => {
@@ -713,7 +809,7 @@ describe('TocrSpecialistHandler', () => {
   });
 
   // -----------------------------------------------------------------------
-  // HTTP 404
+  // 15. HTTP 404
   // -----------------------------------------------------------------------
 
   it('should return not-found failure for HTTP 404', async () => {
@@ -732,7 +828,7 @@ describe('TocrSpecialistHandler', () => {
   });
 
   // -----------------------------------------------------------------------
-  // HTTP 429
+  // 16. HTTP 429
   // -----------------------------------------------------------------------
 
   it('should return rate-limited failure for HTTP 429', async () => {
@@ -751,7 +847,7 @@ describe('TocrSpecialistHandler', () => {
   });
 
   // -----------------------------------------------------------------------
-  // HTTP 5xx
+  // 17. HTTP 5xx
   // -----------------------------------------------------------------------
 
   it('should return server-error failure for HTTP 500', async () => {
@@ -770,7 +866,7 @@ describe('TocrSpecialistHandler', () => {
   });
 
   // -----------------------------------------------------------------------
-  // Handler not registered
+  // 18. Handler not registered
   // -----------------------------------------------------------------------
 
   it('should refuse with handler-not-registered when no handler is registered', async () => {
@@ -791,7 +887,7 @@ describe('TocrSpecialistHandler', () => {
   });
 
   // -----------------------------------------------------------------------
-  // Non-invokable entry
+  // 19. Non-invokable entry
   // -----------------------------------------------------------------------
 
   it('should refuse with non-invokable-entry when entry is not invokable', async () => {
@@ -806,13 +902,13 @@ describe('TocrSpecialistHandler', () => {
   });
 
   // -----------------------------------------------------------------------
-  // Unsupported input
+  // 20. Unsupported input
   // -----------------------------------------------------------------------
 
   it('should refuse with unsupported-input when artifact mediaType is not supported', async () => {
-    const artifact = makeImageArtifact({ mediaType: 'application/pdf' });
+    const artifact = makeTextArtifact({ mediaType: 'image/png' });
     const request = makeRequest({ preparedArtifacts: [artifact] });
-    const entry = makeRegistryEntry({ supportedInputs: ['image/png', 'image/jpeg'] });
+    const entry = makeRegistryEntry({ supportedInputs: ['text/plain', 'text/markdown'] });
     const health = makeHealthSnapshot();
 
     const result = await adapter.invoke(request, entry, health);
@@ -822,15 +918,15 @@ describe('TocrSpecialistHandler', () => {
   });
 
   // -----------------------------------------------------------------------
-  // buildTransportRequest produces correct body
+  // 21. buildTransportRequest produces correct body
   // -----------------------------------------------------------------------
 
-  it('should produce a transport request with base64-encoded image and correct mime', async () => {
+  it('should produce a transport request with text body and correct content type', async () => {
     let capturedReq: SpecialistTransportRequest | null = null;
 
     transport.registerDefaultResponder((req) => {
       capturedReq = req;
-      return successResponse(buildTocrResponse());
+      return successResponse(buildNerResponse());
     });
 
     const request = makeRequest();
@@ -841,25 +937,22 @@ describe('TocrSpecialistHandler', () => {
 
     expect(capturedReq).not.toBeNull();
     expect(capturedReq!.method).toBe('POST');
-    expect(capturedReq!.url).toBe('https://api.aiforthai.in.th/t-ocr/v1');
+    expect(capturedReq!.url).toBe('https://api.aiforthai.in.th/ner/v1');
     expect(capturedReq!.contentType).toBe('application/json');
     expect(capturedReq!.bodyKind).toBe('text');
     expect(capturedReq!.bodyText).toBeDefined();
 
-    // Parse the body and verify structure
+    // Parse the body and verify structure — only {text} in the body
     const body = JSON.parse(capturedReq!.bodyText!);
-    expect(body.image).toBeDefined();
-    expect(typeof body.image).toBe('string');
-    // Verify it's valid base64
-    expect(() => Buffer.from(body.image, 'base64')).not.toThrow();
-    // Verify the decoded bytes match the fixture
-    const decoded = Buffer.from(body.image, 'base64');
-    expect(decoded).toEqual(Buffer.from(FIXTURE_PNG_BYTES));
-    expect(body.mime).toBe('image/png');
+    expect(body.text).toBeDefined();
+    expect(typeof body.text).toBe('string');
+    expect(body.text).toBe(FIXTURE_NER_TEXT);
+    // Only the NER task schema enters the request
+    expect(Object.keys(body)).toEqual(['text']);
   });
 
   // -----------------------------------------------------------------------
-  // buildTransportRequest uses resolveRawKey for Authorization
+  // 22. buildTransportRequest uses resolveRawKey for Authorization
   // -----------------------------------------------------------------------
 
   it('should use the resolved key for Authorization header', async () => {
@@ -867,7 +960,7 @@ describe('TocrSpecialistHandler', () => {
 
     transport.registerDefaultResponder((req) => {
       capturedFetchHeaders = req.fetchHeaders;
-      return successResponse(buildTocrResponse());
+      return successResponse(buildNerResponse());
     });
 
     const request = makeRequest();
@@ -882,7 +975,7 @@ describe('TocrSpecialistHandler', () => {
   });
 
   // -----------------------------------------------------------------------
-  // Adapter never throws
+  // 23. Adapter never throws
   // -----------------------------------------------------------------------
 
   it('should not throw for a valid request', async () => {
@@ -891,5 +984,96 @@ describe('TocrSpecialistHandler', () => {
     const health = makeHealthSnapshot();
 
     await expect(adapter.invoke(request, entry, health)).resolves.toBeDefined();
+  });
+
+  // -----------------------------------------------------------------------
+  // 24. extractedText fallback (Markdown extracted content)
+  // -----------------------------------------------------------------------
+
+  it('should read from extractedText when text is not available', async () => {
+    transport.registerDefaultResponder((_req) =>
+      successResponse(buildNerResponse()),
+    );
+
+    // Use an artifact with extractedText but no text field
+    const extractedArtifact = makeExtractedTextArtifact();
+    const request = makeRequest({ preparedArtifacts: [extractedArtifact] });
+    const entry = makeRegistryEntry();
+    const health = makeHealthSnapshot();
+
+    const result = await adapter.invoke(request, entry, health);
+
+    expect((result as SpecialistResult).ok).toBe(true);
+    const r = result as SpecialistResult;
+    expect(r.fields.entities).toBeDefined();
+    expect(r.fields.entities!.present).toBe(true);
+    const entitiesValue = r.fields.entities!.value as Readonly<Record<string, unknown>>;
+    const entities = entitiesValue.items as readonly Record<string, unknown>[];
+    expect(entities).toHaveLength(EXPECTED_ENTITIES.length);
+  });
+
+  // -----------------------------------------------------------------------
+  // 25. Null entities (non-array → present:false)
+  // -----------------------------------------------------------------------
+
+  it('should mark entities as present:false when entities is null', async () => {
+    transport.registerDefaultResponder((_req) =>
+      successResponse(buildNerResponse({ entities: null })),
+    );
+
+    const request = makeRequest();
+    const entry = makeRegistryEntry();
+    const health = makeHealthSnapshot();
+
+    const result = await adapter.invoke(request, entry, health);
+
+    expect((result as SpecialistResult).ok).toBe(true);
+    const r = result as SpecialistResult;
+
+    expect(r.fields.entities).toBeDefined();
+    expect(r.fields.entities!.kind).toBe('structured');
+    expect(r.fields.entities!.value).toEqual({});
+    expect(r.fields.entities!.present).toBe(false);
+    expect(r.emptyFields).toContain('entities');
+  });
+
+  // -----------------------------------------------------------------------
+  // 26. Missing entities key
+  // -----------------------------------------------------------------------
+
+  it('should mark entities as present:false when entities key is missing from response', async () => {
+    transport.registerDefaultResponder((_req) =>
+      successResponse({ confidence: 0.85 }),
+    );
+
+    const request = makeRequest();
+    const entry = makeRegistryEntry();
+    const health = makeHealthSnapshot();
+
+    const result = await adapter.invoke(request, entry, health);
+
+    expect((result as SpecialistResult).ok).toBe(true);
+    const r = result as SpecialistResult;
+
+    expect(r.fields.entities).toBeDefined();
+    expect(r.fields.entities!.kind).toBe('structured');
+    expect(r.fields.entities!.value).toEqual({});
+    expect(r.fields.entities!.present).toBe(false);
+    expect(r.emptyFields).toContain('entities');
+  });
+
+  // -----------------------------------------------------------------------
+  // 27. App test seam: setSpecialistTransportForTest
+  // -----------------------------------------------------------------------
+
+  it('should accept a transport override via setSpecialistTransportForTest', () => {
+    const app = new CoreApp({ clock });
+    const testTransport = new InMemorySpecialistTransport();
+
+    // The method should not throw
+    expect(() => app.setSpecialistTransportForTest(testTransport)).not.toThrow();
+
+    // Calling it again (re-override) should also work
+    expect(() => app.setSpecialistTransportForTest(testTransport)).not.toThrow();
   });
 });
