@@ -1,8 +1,7 @@
-// Unit tests for Story 4.10: T-OCR Specialist Service handler.
+// Unit tests for Story 4.11: Speech-to-Text Specialist Service handler.
 // Offline tests using InMemorySpecialistTransport. Covers every I/O matrix row + AC.
 
 import { describe, it, expect, beforeEach } from 'vitest';
-import { randomUUID } from 'node:crypto';
 import {
   SharedSpecialistAdapter,
   InMemorySpecialistTransport,
@@ -17,26 +16,26 @@ import {
   type SpecialistInvocation,
   type CredentialScope,
 } from '../src/core/specialists/adapter/index.js';
-import { TocrSpecialistHandler } from '../src/core/specialists/services/tocr/index.js';
+import { SpeechToTextSpecialistHandler } from '../src/core/specialists/services/speech/index.js';
 import {
-  FIXTURE_PNG_BYTES,
-  EXPECTED_TEXT,
+  FIXTURE_WAV_BYTES,
+  EXPECTED_TRANSCRIPT,
   EXPECTED_CONFIDENCE,
-  EXPECTED_WORDS,
-  buildTocrResponse,
-} from '../src/core/specialists/services/tocr/index.js';
+  EXPECTED_SEGMENTS,
+  buildSpeechResponse,
+} from '../src/core/specialists/services/speech/index.js';
 import type { CapabilityRegistryEntry } from '../src/core/specialists/registry/types.js';
+import type { SpeechResponse } from '../src/core/specialists/services/speech/fixture.js';
 import type { SpecialistHealthSnapshot, SpecialistEffectiveConfiguration } from '../src/core/specialists/health/types.js';
 import type { PreparedPayloadManifest, ConsentReference } from '../src/core/specialists/consent/index.js';
 import type { PreparedArtifact } from '../src/core/specialists/artifacts/types.js';
 import { CoreApp } from '../src/core/app.js';
-import type { SpecialistTransport } from '../src/core/specialists/adapter/index.js';
 
 // ---------------------------------------------------------------------------
 // Constants
 // ---------------------------------------------------------------------------
 
-const SERVICE_ID = 't-ocr';
+const SERVICE_ID = 'speech-to-text';
 const STUB_SECRET_KEY = 'sk-test-secret-key-1234567890abcdef';
 
 // ---------------------------------------------------------------------------
@@ -58,14 +57,14 @@ function advanceClock(ms: number): void {
 
 function makeConfig(overrides?: Partial<SpecialistEffectiveConfiguration>): SpecialistEffectiveConfiguration {
   return {
-    id: 'specialist-gen-tocr-001',
+    id: 'specialist-gen-stt-001',
     serviceId: SERVICE_ID,
-    endpoint: 'https://api.aiforthai.in.th/t-ocr/v1',
+    endpoint: 'https://api.aiforthai.in.th/speech-to-text/v1',
     origin: 'aiforthai',
-    serviceMapping: 't-ocr',
+    serviceMapping: 'speech-to-text',
     credentialReferenceId: 'aiforthai',
     credentialRevision: 'rev-1',
-    credentialFingerprint: 'fp-tocr-001',
+    credentialFingerprint: 'fp-stt-001',
     manifestVersion: 1,
     contractVersion: '1.0.0',
     adapterVersion: '1.0.0',
@@ -86,17 +85,17 @@ function makeConfig(overrides?: Partial<SpecialistEffectiveConfiguration>): Spec
 function makeRegistryEntry(overrides?: Partial<CapabilityRegistryEntry>): CapabilityRegistryEntry {
   return {
     id: SERVICE_ID,
-    upstreamId: 'aiforthai-t-ocr',
-    nameThai: 'ที-โอซีอาร์',
-    nameEnglish: 'T-OCR',
-    searchTerms: ['ocr', 'thai', 'optical character recognition'],
-    capabilities: ['ocr'],
-    supportedInputs: ['image/png', 'image/jpeg'],
-    inputLimits: { maxFileSize: '10MB' },
+    upstreamId: 'aiforthai-speech-to-text',
+    nameThai: 'คำพูดเป็นข้อความ',
+    nameEnglish: 'Speech-to-Text',
+    searchTerms: ['speech', 'transcription', 'thai', 'audio'],
+    capabilities: ['speech-to-text'],
+    supportedInputs: ['audio/wav', 'audio/mpeg', 'audio/ogg', 'audio/flac', 'audio/mp4', 'audio/aac'],
+    inputLimits: { maxFileSize: '50MB' },
     entitlement: 'ai-for-thai',
     evidenceLevel: 'full',
     observationDate: '2026-07-18',
-    endpoint: 'https://api.aiforthai.in.th/t-ocr/v1',
+    endpoint: 'https://api.aiforthai.in.th/speech-to-text/v1',
     transportRules: {
       allowedProtocols: ['https'],
       requiresTls: true,
@@ -104,7 +103,7 @@ function makeRegistryEntry(overrides?: Partial<CapabilityRegistryEntry>): Capabi
     },
     privacyClassification: {
       category: 'public',
-      dataClasses: ['text'],
+      dataClasses: ['audio'],
       requiresConsent: true,
     },
     retentionClassification: {
@@ -134,8 +133,8 @@ function makeHealthSnapshot(overrides?: Partial<SpecialistHealthSnapshot>): Spec
   return {
     serviceId: SERVICE_ID,
     state: 'available',
-    generationId: 'specialist-gen-tocr-001',
-    endpoint: 'https://api.aiforthai.in.th/t-ocr/v1',
+    generationId: 'specialist-gen-stt-001',
+    endpoint: 'https://api.aiforthai.in.th/speech-to-text/v1',
     checkedAt: '2026-07-18T12:00:00.000Z',
     ...overrides,
   };
@@ -144,49 +143,49 @@ function makeHealthSnapshot(overrides?: Partial<SpecialistHealthSnapshot>): Spec
 function makeManifest(overrides?: Partial<PreparedPayloadManifest>): PreparedPayloadManifest {
   return {
     manifestVersion: 1,
-    sources: [{ identity: '@receipt.png', sourceHash: 'png-hash-001', mediaType: 'image/png', sizeBytes: FIXTURE_PNG_BYTES.length }],
+    sources: [{ identity: '@meeting.wav', sourceHash: 'wav-hash-001', mediaType: 'audio/wav', sizeBytes: FIXTURE_WAV_BYTES.length }],
     classification: 'public',
-    purpose: 'OCR processing',
+    purpose: 'Speech-to-text transcription',
     transformation: { redactSecrets: true, extractTextOnly: true, stripActiveContent: true, reason: 'standard' },
-    recipient: { capabilityId: SERVICE_ID, capabilityVersion: '1.0.0', verifiedEndpoint: 'https://api.aiforthai.in.th/t-ocr/v1', method: 'POST' },
+    recipient: { capabilityId: SERVICE_ID, capabilityVersion: '1.0.0', verifiedEndpoint: 'https://api.aiforthai.in.th/speech-to-text/v1', method: 'POST' },
     callCount: 1,
     retention: 'upstream-no-retention-verified',
-    operationId: 'op-tocr-001',
+    operationId: 'op-stt-001',
     promptRoundId: 'round-1',
     expiresAt: null,
-    manifestDigest: 'manifest-digest-tocr-001',
-    payloadByteDigest: 'payload-digest-tocr-001',
+    manifestDigest: 'manifest-digest-stt-001',
+    payloadByteDigest: 'payload-digest-stt-001',
     ...overrides,
   };
 }
 
 function makeConsentReference(overrides?: Partial<ConsentReference>): ConsentReference {
   return {
-    consentId: 'consent-tocr-001',
-    manifestDigest: 'manifest-digest-tocr-001',
-    payloadByteDigest: 'payload-digest-tocr-001',
+    consentId: 'consent-stt-001',
+    manifestDigest: 'manifest-digest-stt-001',
+    payloadByteDigest: 'payload-digest-stt-001',
     recipientCapabilityId: SERVICE_ID,
     recipientCapabilityVersion: '1.0.0',
-    verifiedEndpoint: 'https://api.aiforthai.in.th/t-ocr/v1',
-    purpose: 'OCR processing',
+    verifiedEndpoint: 'https://api.aiforthai.in.th/speech-to-text/v1',
+    purpose: 'Speech-to-text transcription',
     grantedAt: '2026-07-18T12:00:00.000Z',
     expiresAt: null,
     ...overrides,
   };
 }
 
-function makeImageArtifact(overrides?: Partial<PreparedArtifact>): PreparedArtifact {
+function makeAudioArtifact(overrides?: Partial<PreparedArtifact>): PreparedArtifact {
   return {
-    reference: { raw: '@receipt.png', canonical: '/workspace/receipt.png' },
-    sourceIdentity: { path: '/workspace/receipt.png', workspaceRoot: '/workspace', relativePath: 'receipt.png', digest: 'png-hash-001', version: null, platform: 'darwin', volume: 'test-vol', binding: 'bound' },
-    mediaType: 'image/png',
-    sizeBytes: FIXTURE_PNG_BYTES.length,
-    contentHash: 'content-hash-png-001',
+    reference: { raw: '@meeting.wav', canonical: '/workspace/meeting.wav' },
+    sourceIdentity: { path: '/workspace/meeting.wav', workspaceRoot: '/workspace', relativePath: 'meeting.wav', digest: 'wav-hash-001', version: null, platform: 'darwin', volume: 'test-vol', binding: 'bound' },
+    mediaType: 'audio/wav',
+    sizeBytes: FIXTURE_WAV_BYTES.length,
+    contentHash: 'content-hash-wav-001',
     contentKind: 'bytes',
-    bytes: FIXTURE_PNG_BYTES,
+    bytes: FIXTURE_WAV_BYTES,
     transformations: [],
     privacyClassification: 'public',
-    compatibility: { status: 'compatible', matchedInput: 'image/png' },
+    compatibility: { status: 'compatible', matchedInput: 'audio/wav' },
     createdAt: '2026-07-18T12:00:00.000Z',
     ...overrides,
   };
@@ -213,7 +212,7 @@ function makeRequest(overrides?: Partial<SpecialistRequest>): SpecialistRequest 
   const config = makeConfig();
   const manifest = makeManifest();
   const consentRef = makeConsentReference();
-  const artifacts = [makeImageArtifact()];
+  const artifacts = [makeAudioArtifact()];
   return {
     serviceId: SERVICE_ID,
     contractVersion: '1.0.0',
@@ -221,7 +220,7 @@ function makeRequest(overrides?: Partial<SpecialistRequest>): SpecialistRequest 
     effectiveConfiguration: config,
     preparedManifest: manifest,
     consentReference: consentRef,
-    operationId: 'op-tocr-001',
+    operationId: 'op-stt-001',
     preparedArtifacts: artifacts,
     options: { timeoutMs: 30000, maxRetries: 0 },
     startedAt: clock(),
@@ -275,7 +274,7 @@ function rawResponse(overrides: Partial<SpecialistRawResponse> & { status: numbe
 // Tests
 // ---------------------------------------------------------------------------
 
-describe('TocrSpecialistHandler', () => {
+describe('SpeechToTextSpecialistHandler', () => {
   let transport: InMemorySpecialistTransport;
   let adapter: SharedSpecialistAdapter;
 
@@ -286,17 +285,17 @@ describe('TocrSpecialistHandler', () => {
       transport,
       clock,
       resolveRawKey: async () => STUB_SECRET_KEY,
-      handlers: [new TocrSpecialistHandler()],
+      handlers: [new SpeechToTextSpecialistHandler()],
     });
   });
 
   // -----------------------------------------------------------------------
-  // 1. Happy path image
+  // 1. Happy path audio
   // -----------------------------------------------------------------------
 
-  it('should return a SpecialistResult with full attribution for a valid image request', async () => {
+  it('should return a SpecialistResult with full attribution for a valid audio request', async () => {
     transport.registerDefaultResponder((_req) =>
-      successResponse(buildTocrResponse()),
+      successResponse(buildSpeechResponse()),
     );
 
     const request = makeRequest();
@@ -310,17 +309,17 @@ describe('TocrSpecialistHandler', () => {
 
     const r = result as SpecialistResult;
     expect(r.serviceId).toBe(SERVICE_ID);
-    expect(r.serviceIdentity.nameEnglish).toBe('T-OCR');
-    expect(r.serviceIdentity.nameThai).toBe('ที-โอซีอาร์');
-    expect(r.configurationGenerationId).toBe('specialist-gen-tocr-001');
-    expect(r.consentReference.consentId).toBe('consent-tocr-001');
-    expect(r.sourceContentHash).toBe('payload-digest-tocr-001');
+    expect(r.serviceIdentity.nameEnglish).toBe('Speech-to-Text');
+    expect(r.serviceIdentity.nameThai).toBe('คำพูดเป็นข้อความ');
+    expect(r.configurationGenerationId).toBe('specialist-gen-stt-001');
+    expect(r.consentReference.consentId).toBe('consent-stt-001');
+    expect(r.sourceContentHash).toBe('payload-digest-stt-001');
 
-    // Check recognizedText field
-    expect(r.fields.recognizedText).toBeDefined();
-    expect(r.fields.recognizedText!.kind).toBe('text');
-    expect(r.fields.recognizedText!.value).toBe(EXPECTED_TEXT);
-    expect(r.fields.recognizedText!.present).toBe(true);
+    // Check transcript field
+    expect(r.fields.transcript).toBeDefined();
+    expect(r.fields.transcript!.kind).toBe('text');
+    expect(r.fields.transcript!.value).toBe(EXPECTED_TRANSCRIPT);
+    expect(r.fields.transcript!.present).toBe(true);
 
     // Check confidence field
     expect(r.fields.confidence).toBeDefined();
@@ -328,16 +327,24 @@ describe('TocrSpecialistHandler', () => {
     expect(r.fields.confidence!.value).toBe(EXPECTED_CONFIDENCE);
     expect(r.fields.confidence!.present).toBe(true);
 
-    // Check words field
-    expect(r.fields.words).toBeDefined();
-    expect(r.fields.words!.kind).toBe('list');
-    expect(r.fields.words!.value).toEqual([...EXPECTED_WORDS]);
-    expect(r.fields.words!.present).toBe(true);
+    // Check segments field (structured — wrapped in { items: [...] })
+    expect(r.fields.segments).toBeDefined();
+    expect(r.fields.segments!.kind).toBe('structured');
+    expect(r.fields.segments!.present).toBe(true);
+    const segsValue = r.fields.segments!.value as Readonly<Record<string, unknown>>;
+    const segs = segsValue.items as readonly Record<string, unknown>[];
+    expect(segs).toHaveLength(EXPECTED_SEGMENTS.length);
+    expect(segs[0].text).toBe(EXPECTED_SEGMENTS[0].text);
+    expect(segs[0].start).toBe(EXPECTED_SEGMENTS[0].start);
+    expect(segs[0].end).toBe(EXPECTED_SEGMENTS[0].end);
+    expect(segs[1].text).toBe(EXPECTED_SEGMENTS[1].text);
+    expect(segs[1].start).toBe(EXPECTED_SEGMENTS[1].start);
+    expect(segs[1].end).toBe(EXPECTED_SEGMENTS[1].end);
 
     // Check emptyFields excludes present fields
-    expect(r.emptyFields).not.toContain('recognizedText');
+    expect(r.emptyFields).not.toContain('transcript');
     expect(r.emptyFields).not.toContain('confidence');
-    expect(r.emptyFields).not.toContain('words');
+    expect(r.emptyFields).not.toContain('segments');
 
     // Check confidence at top level
     expect(r.confidence).toBe(EXPECTED_CONFIDENCE);
@@ -348,7 +355,7 @@ describe('TocrSpecialistHandler', () => {
     expect(r.timing.elapsedMs).toBeGreaterThanOrEqual(0);
 
     // Check provenance
-    expect(r.provenance.endpoint).toBe('https://api.aiforthai.in.th/t-ocr/v1');
+    expect(r.provenance.endpoint).toBe('https://api.aiforthai.in.th/speech-to-text/v1');
     expect(r.provenance.method).toBe('POST');
     expect(r.provenance.status).toBe(200);
 
@@ -359,12 +366,12 @@ describe('TocrSpecialistHandler', () => {
   });
 
   // -----------------------------------------------------------------------
-  // 2. Response missing confidence
+  // 2. Response missing segments
   // -----------------------------------------------------------------------
 
-  it('should mark confidence as present:false when response omits confidence', async () => {
+  it('should mark segments as present:false when response omits segments', async () => {
     transport.registerDefaultResponder((_req) =>
-      successResponse(buildTocrResponse({ confidence: undefined })),
+      successResponse(buildSpeechResponse({ segments: undefined })),
     );
 
     const request = makeRequest();
@@ -376,13 +383,51 @@ describe('TocrSpecialistHandler', () => {
     expect((result as SpecialistResult).ok).toBe(true);
     const r = result as SpecialistResult;
 
-    // recognizedText should be present
-    expect(r.fields.recognizedText).toBeDefined();
-    expect(r.fields.recognizedText!.present).toBe(true);
+    // transcript should be present
+    expect(r.fields.transcript).toBeDefined();
+    expect(r.fields.transcript!.present).toBe(true);
 
-    // words should be present
-    expect(r.fields.words).toBeDefined();
-    expect(r.fields.words!.present).toBe(true);
+    // confidence should be present
+    expect(r.fields.confidence).toBeDefined();
+    expect(r.fields.confidence!.present).toBe(true);
+
+    // segments should be absent
+    expect(r.fields.segments).toBeDefined();
+    expect(r.fields.segments!.kind).toBe('structured');
+    expect(r.fields.segments!.value).toEqual({});
+    expect(r.fields.segments!.present).toBe(false);
+
+    // segments should be in emptyFields
+    expect(r.emptyFields).toContain('segments');
+    expect(r.emptyFields).not.toContain('transcript');
+    expect(r.emptyFields).not.toContain('confidence');
+  });
+
+  // -----------------------------------------------------------------------
+  // 3. Response missing confidence
+  // -----------------------------------------------------------------------
+
+  it('should mark confidence as present:false when response omits confidence', async () => {
+    transport.registerDefaultResponder((_req) =>
+      successResponse(buildSpeechResponse({ confidence: undefined })),
+    );
+
+    const request = makeRequest();
+    const entry = makeRegistryEntry();
+    const health = makeHealthSnapshot();
+
+    const result = await adapter.invoke(request, entry, health);
+
+    expect((result as SpecialistResult).ok).toBe(true);
+    const r = result as SpecialistResult;
+
+    // transcript should be present
+    expect(r.fields.transcript).toBeDefined();
+    expect(r.fields.transcript!.present).toBe(true);
+
+    // segments should be present
+    expect(r.fields.segments).toBeDefined();
+    expect(r.fields.segments!.present).toBe(true);
 
     // confidence should be absent
     expect(r.fields.confidence).toBeDefined();
@@ -392,20 +437,20 @@ describe('TocrSpecialistHandler', () => {
 
     // confidence should be in emptyFields
     expect(r.emptyFields).toContain('confidence');
-    expect(r.emptyFields).not.toContain('recognizedText');
-    expect(r.emptyFields).not.toContain('words');
+    expect(r.emptyFields).not.toContain('transcript');
+    expect(r.emptyFields).not.toContain('segments');
 
     // Top-level confidence should be undefined
     expect(r.confidence).toBeUndefined();
   });
 
   // -----------------------------------------------------------------------
-  // 3. Response missing words
+  // 4. Empty transcript
   // -----------------------------------------------------------------------
 
-  it('should mark words as present:false when response omits words', async () => {
+  it('should mark transcript as present:false when transcript is empty string', async () => {
     transport.registerDefaultResponder((_req) =>
-      successResponse(buildTocrResponse({ words: undefined })),
+      successResponse(buildSpeechResponse({ transcript: '' })),
     );
 
     const request = makeRequest();
@@ -417,55 +462,17 @@ describe('TocrSpecialistHandler', () => {
     expect((result as SpecialistResult).ok).toBe(true);
     const r = result as SpecialistResult;
 
-    // recognizedText should be present
-    expect(r.fields.recognizedText).toBeDefined();
-    expect(r.fields.recognizedText!.present).toBe(true);
+    // transcript should be present:false (empty)
+    expect(r.fields.transcript).toBeDefined();
+    expect(r.fields.transcript!.kind).toBe('text');
+    expect(r.fields.transcript!.value).toBe('');
+    expect(r.fields.transcript!.present).toBe(false);
 
-    // confidence should be present
-    expect(r.fields.confidence).toBeDefined();
-    expect(r.fields.confidence!.present).toBe(true);
-
-    // words should be absent
-    expect(r.fields.words).toBeDefined();
-    expect(r.fields.words!.kind).toBe('list');
-    expect(r.fields.words!.value).toEqual([]);
-    expect(r.fields.words!.present).toBe(false);
-
-    // words should be in emptyFields
-    expect(r.emptyFields).toContain('words');
-    expect(r.emptyFields).not.toContain('recognizedText');
-    expect(r.emptyFields).not.toContain('confidence');
-  });
-
-  // -----------------------------------------------------------------------
-  // 4. Empty result text
-  // -----------------------------------------------------------------------
-
-  it('should mark recognizedText as present:false when result is empty string', async () => {
-    transport.registerDefaultResponder((_req) =>
-      successResponse(buildTocrResponse({ result: '' })),
-    );
-
-    const request = makeRequest();
-    const entry = makeRegistryEntry();
-    const health = makeHealthSnapshot();
-
-    const result = await adapter.invoke(request, entry, health);
-
-    expect((result as SpecialistResult).ok).toBe(true);
-    const r = result as SpecialistResult;
-
-    // recognizedText should be present:false (empty)
-    expect(r.fields.recognizedText).toBeDefined();
-    expect(r.fields.recognizedText!.kind).toBe('text');
-    expect(r.fields.recognizedText!.value).toBe('');
-    expect(r.fields.recognizedText!.present).toBe(false);
-
-    // recognizedText should be in emptyFields
-    expect(r.emptyFields).toContain('recognizedText');
+    // transcript should be in emptyFields
+    expect(r.emptyFields).toContain('transcript');
 
     // No fabricated text
-    expect(r.fields.recognizedText!.value).not.toBe(EXPECTED_TEXT);
+    expect(r.fields.transcript!.value).not.toBe(EXPECTED_TRANSCRIPT);
   });
 
   // -----------------------------------------------------------------------
@@ -522,13 +529,13 @@ describe('TocrSpecialistHandler', () => {
   });
 
   // -----------------------------------------------------------------------
-  // 6. No image bytes (text artifact)
+  // 6. No audio bytes (text artifact)
   // -----------------------------------------------------------------------
 
-  it('should return unknown-outcome failure when artifact has no image bytes', async () => {
+  it('should return unknown-outcome failure when artifact has no audio bytes', async () => {
     // Create a request with a text artifact (no bytes) but with a supported
     // media type so it passes validation.
-    const textArtifact = makeTextArtifact({ mediaType: 'image/png' });
+    const textArtifact = makeTextArtifact({ mediaType: 'audio/wav' });
     const request = makeRequest({ preparedArtifacts: [textArtifact] });
     const entry = makeRegistryEntry();
     const health = makeHealthSnapshot();
@@ -590,7 +597,7 @@ describe('TocrSpecialistHandler', () => {
     transport.registerDefaultResponder((req) => {
       capturedHeadersSummary = req.headersSummary;
       capturedFetchHeaders = req.fetchHeaders;
-      return successResponse(buildTocrResponse());
+      return successResponse(buildSpeechResponse());
     });
 
     const request = makeRequest();
@@ -630,12 +637,12 @@ describe('TocrSpecialistHandler', () => {
     const handlers = defaultSpecialistHandlers();
 
     expect(handlers).toHaveLength(2);
-    expect(handlers[0].serviceId).toBe(SERVICE_ID);
+    expect(handlers.find(h => h.serviceId === 'speech-to-text')).toBeDefined();
 
     // Verify the handler works through the adapter
     const testTransport = new InMemorySpecialistTransport();
     testTransport.registerDefaultResponder((_req) =>
-      successResponse(buildTocrResponse()),
+      successResponse(buildSpeechResponse()),
     );
 
     const testAdapter = new SharedSpecialistAdapter({
@@ -654,9 +661,9 @@ describe('TocrSpecialistHandler', () => {
     expect((result as SpecialistResult).ok).toBe(true);
     const r = result as SpecialistResult;
     expect(r.serviceId).toBe(SERVICE_ID);
-    expect(r.fields.recognizedText).toBeDefined();
-    expect(r.fields.recognizedText!.present).toBe(true);
-    expect(r.fields.recognizedText!.value).toBe(EXPECTED_TEXT);
+    expect(r.fields.transcript).toBeDefined();
+    expect(r.fields.transcript!.present).toBe(true);
+    expect(r.fields.transcript!.value).toBe(EXPECTED_TRANSCRIPT);
   });
 
   // -----------------------------------------------------------------------
@@ -732,7 +739,7 @@ describe('TocrSpecialistHandler', () => {
   });
 
   // -----------------------------------------------------------------------
-  // HTTP 429
+  // Quota 429 (no auto-retry, no quarantine assertion)
   // -----------------------------------------------------------------------
 
   it('should return rate-limited failure for HTTP 429', async () => {
@@ -810,9 +817,9 @@ describe('TocrSpecialistHandler', () => {
   // -----------------------------------------------------------------------
 
   it('should refuse with unsupported-input when artifact mediaType is not supported', async () => {
-    const artifact = makeImageArtifact({ mediaType: 'application/pdf' });
+    const artifact = makeAudioArtifact({ mediaType: 'application/pdf' });
     const request = makeRequest({ preparedArtifacts: [artifact] });
-    const entry = makeRegistryEntry({ supportedInputs: ['image/png', 'image/jpeg'] });
+    const entry = makeRegistryEntry({ supportedInputs: ['audio/wav', 'audio/mpeg'] });
     const health = makeHealthSnapshot();
 
     const result = await adapter.invoke(request, entry, health);
@@ -825,12 +832,12 @@ describe('TocrSpecialistHandler', () => {
   // buildTransportRequest produces correct body
   // -----------------------------------------------------------------------
 
-  it('should produce a transport request with base64-encoded image and correct mime', async () => {
+  it('should produce a transport request with base64-encoded audio and correct mime', async () => {
     let capturedReq: SpecialistTransportRequest | null = null;
 
     transport.registerDefaultResponder((req) => {
       capturedReq = req;
-      return successResponse(buildTocrResponse());
+      return successResponse(buildSpeechResponse());
     });
 
     const request = makeRequest();
@@ -841,21 +848,21 @@ describe('TocrSpecialistHandler', () => {
 
     expect(capturedReq).not.toBeNull();
     expect(capturedReq!.method).toBe('POST');
-    expect(capturedReq!.url).toBe('https://api.aiforthai.in.th/t-ocr/v1');
+    expect(capturedReq!.url).toBe('https://api.aiforthai.in.th/speech-to-text/v1');
     expect(capturedReq!.contentType).toBe('application/json');
     expect(capturedReq!.bodyKind).toBe('text');
     expect(capturedReq!.bodyText).toBeDefined();
 
     // Parse the body and verify structure
     const body = JSON.parse(capturedReq!.bodyText!);
-    expect(body.image).toBeDefined();
-    expect(typeof body.image).toBe('string');
+    expect(body.audio).toBeDefined();
+    expect(typeof body.audio).toBe('string');
     // Verify it's valid base64
-    expect(() => Buffer.from(body.image, 'base64')).not.toThrow();
+    expect(() => Buffer.from(body.audio, 'base64')).not.toThrow();
     // Verify the decoded bytes match the fixture
-    const decoded = Buffer.from(body.image, 'base64');
-    expect(decoded).toEqual(Buffer.from(FIXTURE_PNG_BYTES));
-    expect(body.mime).toBe('image/png');
+    const decoded = Buffer.from(body.audio, 'base64');
+    expect(decoded).toEqual(Buffer.from(FIXTURE_WAV_BYTES));
+    expect(body.mime).toBe('audio/wav');
   });
 
   // -----------------------------------------------------------------------
@@ -867,7 +874,7 @@ describe('TocrSpecialistHandler', () => {
 
     transport.registerDefaultResponder((req) => {
       capturedFetchHeaders = req.fetchHeaders;
-      return successResponse(buildTocrResponse());
+      return successResponse(buildSpeechResponse());
     });
 
     const request = makeRequest();
@@ -891,5 +898,86 @@ describe('TocrSpecialistHandler', () => {
     const health = makeHealthSnapshot();
 
     await expect(adapter.invoke(request, entry, health)).resolves.toBeDefined();
+  });
+
+  // -----------------------------------------------------------------------
+  // Missing segments with non-object elements
+  // -----------------------------------------------------------------------
+
+  it('should mark segments as present:false when segments contains only non-objects', async () => {
+    transport.registerDefaultResponder((_req) =>
+      // Deliberately pass non-SpeechSegment elements to test per-element filtering
+      successResponse(buildSpeechResponse({ segments: ['not', 'objects'] } as Partial<SpeechResponse>)),
+    );
+
+    const request = makeRequest();
+    const entry = makeRegistryEntry();
+    const health = makeHealthSnapshot();
+
+    const result = await adapter.invoke(request, entry, health);
+
+    expect((result as SpecialistResult).ok).toBe(true);
+    const r = result as SpecialistResult;
+
+    expect(r.fields.segments).toBeDefined();
+    expect(r.fields.segments!.kind).toBe('structured');
+    expect(r.fields.segments!.value).toEqual({});
+    expect(r.fields.segments!.present).toBe(false);
+    expect(r.emptyFields).toContain('segments');
+  });
+
+  // -----------------------------------------------------------------------
+  // Empty segments array
+  // -----------------------------------------------------------------------
+
+  it('should mark segments as present:false when segments is an empty array', async () => {
+    transport.registerDefaultResponder((_req) =>
+      successResponse(buildSpeechResponse({ segments: [] })),
+    );
+
+    const request = makeRequest();
+    const entry = makeRegistryEntry();
+    const health = makeHealthSnapshot();
+
+    const result = await adapter.invoke(request, entry, health);
+
+    expect((result as SpecialistResult).ok).toBe(true);
+    const r = result as SpecialistResult;
+
+    expect(r.fields.segments).toBeDefined();
+    expect(r.fields.segments!.kind).toBe('structured');
+    expect(r.fields.segments!.value).toEqual({});
+    expect(r.fields.segments!.present).toBe(false);
+    expect(r.emptyFields).toContain('segments');
+  });
+
+  // -----------------------------------------------------------------------
+  // Mixed valid + invalid segments
+  // -----------------------------------------------------------------------
+
+  it('should keep valid segments and drop invalid ones from a mixed array', async () => {
+    transport.registerDefaultResponder((_req) =>
+      // Deliberately mix valid SpeechSegment objects with invalid elements
+      successResponse(buildSpeechResponse({ segments: [{ text: 'hello' }, 'invalid', { text: 'world' }] } as Partial<SpeechResponse>)),
+    );
+
+    const request = makeRequest();
+    const entry = makeRegistryEntry();
+    const health = makeHealthSnapshot();
+
+    const result = await adapter.invoke(request, entry, health);
+
+    expect((result as SpecialistResult).ok).toBe(true);
+    const r = result as SpecialistResult;
+
+    expect(r.fields.segments).toBeDefined();
+    expect(r.fields.segments!.kind).toBe('structured');
+    expect(r.fields.segments!.present).toBe(true);
+    const segsValue = r.fields.segments!.value as Readonly<Record<string, unknown>>;
+    const segs = segsValue.items as readonly Record<string, unknown>[];
+    expect(segs).toHaveLength(2);
+    expect(segs[0].text).toBe('hello');
+    expect(segs[1].text).toBe('world');
+    expect(r.emptyFields).not.toContain('segments');
   });
 });
