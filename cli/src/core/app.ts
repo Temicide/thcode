@@ -1843,7 +1843,12 @@ export class CoreApp {
             return renderCommandOutput({ status: 'blocked', cause: result.message, nextStep: 'verify the service id and retry' });
           }
           const mode: CatalogRenderMode = this.detectRenderMode();
-          const body = result.entry ? renderEntryDetail(result.entry, mode) : result.message;
+          // AC #3: the read-only disclosure for a non-invokable entry is part of
+          // the honest inspection contract — never drop the controls message.
+          const detail = result.entry ? renderEntryDetail(result.entry, mode) : '';
+          const body = result.message.startsWith('Inspection only')
+            ? [result.message, detail].filter(Boolean).join('\n')
+            : detail || result.message;
           return renderCommandOutput({ status: 'succeeded', body, nextStep: 'continue' });
         }
         if (sub === 'enable' && args[1]) {

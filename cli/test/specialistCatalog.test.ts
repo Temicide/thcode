@@ -1,6 +1,8 @@
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
+import { CoreApp } from '../src/core/app.js';
+import { InMemoryCredentialStore } from '../src/core/platform/credentialStore.js';
 import { CapabilityRegistry } from '../src/core/specialists/registry/index.js';
 import {
   computeCanonicalState,
@@ -937,6 +939,181 @@ describe('AC: output parity across modes', () => {
       } else {
         expect(line).toContain('browse');
       }
+    }
+  });
+
+  it('Thai-language display (nameThai) does not alter the canonical English state token across modes', () => {
+    // AC #5: Thai/mixed-language output keeps canonical tokens unchanged.
+    const registry = loadRegistry();
+    const entry = registry.byId('t-ocr')!;
+    expect(entry.nameThai).toBe('ที-โอซีอาร์');
+    const projected = projectEntry(entry, 'quarantined', false);
+    const modes: Array<Parameters<typeof renderEntryRow>[1]> = ['interactive', 'linearized', 'redirected', 'headless', 'narrow'];
+    for (const mode of modes) {
+      const line = renderEntryRow(projected, mode);
+      if (mode === 'headless') {
+        expect(JSON.parse(line).canonicalState).toBe('quarantined');
+      } else {
+        expect(line).toContain('quarantined');
+        expect(line).not.toContain('working');
+        expect(line).not.toContain('available');
+      }
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// AC #1: `/tools` browse/search/inspect/enable/disable/diagnose/retest
+// through the canonical CoreApp projection (not just the bare module fns).
+// ---------------------------------------------------------------------------
+
+describe('CoreApp /tools — browse/search/inspect/enable/disable/diagnose/retest (AC #1)', () => {
+  const makeApp = () => new CoreApp({ credentials: new InMemoryCredentialStore() });
+
+  it('/tools (no subcommand) browses the full catalog', () => {
+    const out = makeApp().dispatchCommand('/tools');
+    expect(out.exitCode).toBe(0);
+    expect(out.stdout).toContain('t-ocr');
+    expect(out.stdout).toContain('typhoon-translate');
+  });
+
+  it('/tools search <English> finds an entry by canonical English name and excludes non-matches', () => {
+    const out = makeApp().dispatchCommand('/tools search T-OCR');
+    expect(out.exitCode).toBe(0);
+    expect(out.stdout).toContain('t-ocr');
+    // A broken search returning the whole catalog must fail this.
+    expect(out.stdout).not.toContain('typhoon-translate');
+  });
+
+  it('/tools search <Thai> finds an entry by Thai name through the same CoreApp path', () => {
+    const out = makeApp().dispatchCommand('/tools search ที-โอซีอาร์');
+    expect(out.exitCode).toBe(0);
+    expect(out.stdout).toContain('t-ocr');
+  });
+
+  it('/tools search <search term> matches via registry search terms', () => {
+    const out = makeApp().dispatchCommand('/tools search ocr');
+    expect(out.exitCode).toBe(0);
+    expect(out.stdout).toContain('t-ocr');
+  });
+
+  it('/tools search with zero matches succeeds honestly with 0 match(es)', () => {
+    const out = makeApp().dispatchCommand('/tools search zzzz-no-such-service');
+    expect(out.exitCode).toBe(0);
+    expect(out.stdout).toContain('0 match(es)');
+    expect(out.stdout).not.toContain('t-ocr');
+  });
+
+  it('/tools inspect <invokable id> shows identity, capabilities, inputs, limits, entitlement, evidence level, versions, observation date, health, invocation eligibility', () => {
+    const out = makeApp().dispatchCommand('/tools inspect t-ocr');
+    expect(out.exitCode).toBe(0);
+    expect(out.stdout).toContain('t-ocr');
+    expect(out.stdout).toContain('T-OCR');
+    expect(out.stdout).toContain('thai-ocr');
+    expect(out.stdout).toContain('image/png');
+    expect(out.stdout).toContain('maxFileSize=20MB');
+    expect(out.stdout).toContain('AI-for-Thai API key required');
+    expect(out.stdout).toContain('deterministic');
+    expect(out.stdout).toContain('Manifest v1');
+    expect(out.stdout).toContain('Contract 1.0.0');
+    expect(out.stdout).toContain('Observed:');
+    expect(out.stdout).toContain('Health:');
+    expect(out.stdout).toContain('Invocation eligible:');
+  });
+
+  it('/tools inspect <non-launch id> shows exactly "Catalogued — Not available yet" AND the read-only disclosure through CoreApp', () => {
+    const out = makeApp().dispatchCommand('/tools inspect typhoon-translate');
+    expect(out.exitCode).toBe(0);
+    expect(out.stdout).toContain('Catalogued — Not available yet');
+    // AC #3: the inspection-only disclosure must reach the user via CoreApp,
+    // not just exist inside the controls module.
+    expect(out.stdout).toContain('Inspection only');
+    expect(out.stdout).toContain(
+      'No invocation proposal, adapter call, prepared payload, or consent prompt',
+    );
+  });
+
+  it('/tools disable <non-launch id> is refused — never made invokable', () => {
+    const out = makeApp().dispatchCommand('/tools disable typhoon-translate');
+    expect(out.exitCode).toBe(20);
+    expect(out.stderr).toContain('not invokable');
+  });
+
+  it('/tools disable then /tools enable round-trips on the same CoreApp instance and is reflected on inspect', () => {
+    const app = makeApp();
+    const disableOut = app.dispatchCommand('/tools disable t-ocr');
+    expect(disableOut.exitCode).toBe(0);
+    // Confirmation must name the exact service, not just say "disabled".
+    expect(disableOut.stdout).toContain('Service "t-ocr" disabled');
+
+    const inspectDisabled = app.dispatchCommand('/tools inspect t-ocr');
+    expect(inspectDisabled.exitCode).toBe(0);
+    expect(inspectDisabled.stdout).toContain('State: disabled');
+
+    const enableOut = app.dispatchCommand('/tools enable t-ocr');
+    expect(enableOut.exitCode).toBe(0);
+    expect(enableOut.stdout).toContain('Service "t-ocr" enabled');
+
+    const inspectEnabled = app.dispatchCommand('/tools inspect t-ocr');
+    // Positive assertion — a broken/empty inspect must not pass vacuously.
+    expect(inspectEnabled.exitCode).toBe(0);
+    expect(inspectEnabled.stdout).toContain('State: unconfigured');
+    expect(inspectEnabled.stdout).not.toContain('State: disabled');
+  });
+
+  it('/tools enable <id-not-disabled> is refused through CoreApp (exit 20)', () => {
+    const out = makeApp().dispatchCommand('/tools enable t-ocr');
+    expect(out.exitCode).toBe(20);
+    expect(out.stderr).toContain('not disabled');
+  });
+
+  it('/tools disable <already-disabled id> is refused through CoreApp (exit 20)', () => {
+    const app = makeApp();
+    expect(app.dispatchCommand('/tools disable t-ocr').exitCode).toBe(0);
+    const out = app.dispatchCommand('/tools disable t-ocr');
+    expect(out.exitCode).toBe(20);
+    expect(out.stderr).toContain('already disabled');
+  });
+
+  it('/tools diagnose <id> reports the actual canonical state, not just the template labels', () => {
+    const out = makeApp().dispatchCommand('/tools diagnose t-ocr');
+    expect(out.exitCode).toBe(0);
+    // With no probe registered, t-ocr's health defaults to unconfigured —
+    // the diagnosis must carry that concrete value, not merely the headings.
+    expect(out.stdout).toContain('State: unconfigured');
+    expect(out.stdout).toContain('Next action:');
+    expect(out.stdout).toContain('Retest recommended: false');
+  });
+
+  it('/tools retest <id> reports the concrete non-working state, never a tautology', () => {
+    const out = makeApp().dispatchCommand('/tools retest t-ocr');
+    expect(out.exitCode).toBe(0);
+    // t-ocr defaults to unconfigured — the message must pin that branch;
+    // a service flipped to working would fail this assertion.
+    expect(out.stdout).toContain('Retest recommended for "t-ocr"');
+    expect(out.stdout).toContain('Current state: unconfigured');
+    expect(out.stdout).not.toContain('already working');
+  });
+
+  it('/tools retest <non-invokable id> reports retest not applicable', () => {
+    const out = makeApp().dispatchCommand('/tools retest typhoon-translate');
+    expect(out.exitCode).toBe(0);
+    expect(out.stdout).toContain('not invokable');
+    expect(out.stdout).toContain('Retest not applicable');
+  });
+
+  it('/tools inspect <unknown id> is blocked and never fabricates an entry', () => {
+    const out = makeApp().dispatchCommand('/tools inspect does-not-exist');
+    expect(out.exitCode).toBe(20);
+    expect(out.stderr).toContain('not found');
+  });
+
+  it('/tools disable, diagnose, and retest on unknown ids are blocked through CoreApp (exit 20)', () => {
+    const app = makeApp();
+    for (const cmd of ['/tools disable does-not-exist', '/tools diagnose does-not-exist', '/tools retest does-not-exist']) {
+      const out = app.dispatchCommand(cmd);
+      expect(out.exitCode).toBe(20);
+      expect(out.stderr).toContain('not found');
     }
   });
 });
