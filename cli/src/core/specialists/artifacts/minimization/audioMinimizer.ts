@@ -29,12 +29,14 @@ function parseWavDuration(bytes: Uint8Array): number | null {
   // Check WAVE identifier at offset 8.
   if (bytes[8] !== 0x57 || bytes[9] !== 0x41 || bytes[10] !== 0x56 || bytes[11] !== 0x45) return null;
 
-  // Scan for "fmt " chunk.
+  // Scan for "fmt " and "data" chunks (order is not guaranteed in RIFF).
   let audioFormat = 0;
   let channels = 0;
   let sampleRate = 0;
   let bitsPerSample = 0;
   let foundFmt = false;
+  let dataSize = 0;
+  let foundData = false;
 
   let offset = 12;
   while (offset + 8 <= bytes.length) {
@@ -50,8 +52,13 @@ function parseWavDuration(bytes: Uint8Array): number | null {
       foundFmt = true;
     }
 
-    if (chunkId === 'data' && foundFmt) {
-      const dataSize = chunkSize;
+    if (chunkId === 'data') {
+      dataSize = chunkSize;
+      foundData = true;
+    }
+
+    // Compute duration once both fmt and data are available (order-independent).
+    if (foundFmt && foundData) {
       if (channels === 0 || sampleRate === 0 || bitsPerSample === 0) return null;
       // Only PCM (audioFormat === 1) or IEEE float (audioFormat === 3) are reliably measurable.
       if (audioFormat !== 1 && audioFormat !== 3) return null;
@@ -119,8 +126,9 @@ export class AudioMinimizer implements ArtifactMinimizer {
       };
     }
 
-    // For WAV, parse duration from the RIFF header.
-    if (artifact.mediaType === 'audio/wav') {
+    // For WAV (including audio/x-wav), parse duration from the RIFF header.
+    const normalizedType = artifact.mediaType.toLowerCase();
+    if (normalizedType === 'audio/wav' || normalizedType === 'audio/x-wav') {
       const duration = parseWavDuration(bytes);
       if (duration === null) {
         return {

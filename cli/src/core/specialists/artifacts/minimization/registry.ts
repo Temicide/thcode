@@ -46,19 +46,20 @@ export function createDefaultMinimizerRegistry(): ArtifactMinimizerRegistry {
 /**
  * Determine whether a given input limit key is relevant to a media type family.
  * Used to decide whether an unsupported type should fail-closed.
- * `application/octet-stream` is a catch-all binary type — no text-like limits
- * are relevant to it.
+ * `maxFileSize` is a general limit that applies to all types and does NOT
+ * trigger `unsupported-type` — only per-type format-specific limits do.
+ * `application/*` is a broad category that includes many binary formats
+ * (PDF, ZIP, gzip) where text-length limits are not meaningful.
  */
 function isRelevantLimit(limitKey: string, mediaType: string): boolean {
-  if (mediaType === 'application/octet-stream') return false;
-  if (mediaType.startsWith('text/') || mediaType.startsWith('application/')) {
+  if (mediaType.startsWith('text/')) {
     return limitKey === 'maxTextLength';
   }
   if (mediaType.startsWith('image/')) {
-    return limitKey === 'maxResolution' || limitKey === 'maxFileSize';
+    return limitKey === 'maxResolution';
   }
   if (mediaType.startsWith('audio/') || mediaType.startsWith('video/')) {
-    return limitKey === 'maxDuration' || limitKey === 'maxSampleRate' || limitKey === 'maxFileSize';
+    return limitKey === 'maxDuration' || limitKey === 'maxSampleRate';
   }
   return false;
 }

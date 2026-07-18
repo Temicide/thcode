@@ -103,19 +103,10 @@ export class TextMinimizer implements ArtifactMinimizer {
       };
     }
 
-    const clusterCount = countGraphemes(text);
-    if (clusterCount <= maxClusters) {
-      // Within limit → pass-through.
-      return {
-        ok: true,
-        artifact,
-        transformations: [],
-      };
-    }
-
-    // Truncate at grapheme boundary.
+    // Truncate at grapheme boundary (single pass — avoids double segmentation).
     const { text: truncatedText, truncated } = truncateTextAtGrapheme(text, maxClusters);
     if (!truncated) {
+      // Within limit → pass-through.
       return {
         ok: true,
         artifact,
@@ -146,7 +137,7 @@ export class TextMinimizer implements ArtifactMinimizer {
     return {
       ok: true,
       artifact: minimized,
-      transformations: ['text-truncate'],
+      transformations: Object.freeze(['text-truncate']),
     };
   }
 }

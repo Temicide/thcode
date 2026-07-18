@@ -662,8 +662,8 @@ describe('parseImageDimensions', () => {
     // VP8 chunk
     bytes[12] = 0x56; bytes[13] = 0x50; bytes[14] = 0x38; bytes[15] = 0x20; // "VP8 "
     bytes[16] = 0x0a; bytes[17] = 0x00; bytes[18] = 0x00; bytes[19] = 0x00; // chunk size = 10
-    // VP8 key frame header (10 bytes)
-    bytes[20] = 0x9d; bytes[21] = 0x01; bytes[22] = 0x2a; // frame tag
+    // VP8 key frame header (10 bytes) — bit 0 must be 0 for key frame.
+    bytes[20] = 0x9c; bytes[21] = 0x01; bytes[22] = 0x2a; // frame tag
     bytes[23] = 0x00; bytes[24] = 0x00; bytes[25] = 0x00; // padding
     // Width = ((data[6] | (data[7] << 8)) & 0x3fff) + 1
     // data[6] = bytes[26], data[7] = bytes[27]
@@ -677,6 +677,67 @@ describe('parseImageDimensions', () => {
     expect(dims).toEqual({ width: 641, height: 481 });
   });
 
+  it('parses WebP VP8L (lossless) dimensions', () => {
+    // Minimal WebP: RIFF + WEBP + VP8L chunk
+    const bytes = new Uint8Array(30);
+    // RIFF header
+    bytes[0] = 0x52; bytes[1] = 0x49; bytes[2] = 0x46; bytes[3] = 0x46; // "RIFF"
+    bytes[4] = 0x14; bytes[5] = 0x00; bytes[6] = 0x00; bytes[7] = 0x00; // file size
+    bytes[8] = 0x57; bytes[9] = 0x45; bytes[10] = 0x42; bytes[11] = 0x50; // "WEBP"
+    // VP8L chunk
+    bytes[12] = 0x56; bytes[13] = 0x50; bytes[14] = 0x38; bytes[15] = 0x4c; // "VP8L"
+    bytes[16] = 0x05; bytes[17] = 0x00; bytes[18] = 0x00; bytes[19] = 0x00; // chunk size = 5
+    // VP8L header (5 bytes): signature byte + width/height packed
+    bytes[20] = 0x2f; // signature (0x2f)
+    // Width = (data[1] | ((data[2] & 0x3f) << 8)) + 1
+    // 320 = 0x0140 → data[1]=0x40, data[2]=0x01 → (0x40 | (0x01 << 8)) & 0x3fff = 0x0140 = 320, +1 = 321
+    bytes[21] = 0x40; bytes[22] = 0x01;
+    // Height = ((data[2] >> 6) | (data[3] << 2) | ((data[4] & 0x0f) << 10)) + 1
+    // 240 = 0x00F0 → data[2]=0x01, data[3]=0x3C, data[4]=0x00
+    // ((0x01 >> 6) | (0x3C << 2) | (0x00 << 10)) = 0xF0 = 240, +1 = 241
+    bytes[23] = 0x3c; bytes[24] = 0x00;
+
+    const dims = parseImageDimensions(bytes, 'image/webp');
+    expect(dims).toEqual({ width: 321, height: 241 });
+  });
+
+  it('parses WebP VP8X (extended) dimensions', () => {
+    // Minimal WebP: RIFF + WEBP + VP8X chunk
+    const bytes = new Uint8Array(30);
+    // RIFF header
+    bytes[0] = 0x52; bytes[1] = 0x49; bytes[2] = 0x46; bytes[3] = 0x46; // "RIFF"
+    bytes[4] = 0x14; bytes[5] = 0x00; bytes[6] = 0x00; bytes[7] = 0x00; // file size
+    bytes[8] = 0x57; bytes[9] = 0x45; bytes[10] = 0x42; bytes[11] = 0x50; // "WEBP"
+    // VP8X chunk
+    bytes[12] = 0x56; bytes[13] = 0x50; bytes[14] = 0x38; bytes[15] = 0x58; // "VP8X"
+    bytes[16] = 0x0a; bytes[17] = 0x00; bytes[18] = 0x00; bytes[19] = 0x00; // chunk size = 10
+    // VP8X header (10 bytes): flags (1) + reserved (3) + width (3 LE) + height (3 LE)
+    bytes[20] = 0x00; // flags
+    bytes[21] = 0x00; bytes[22] = 0x00; bytes[23] = 0x00; // reserved
+    // Width = (data[4] | (data[5] << 8) | (data[6] << 16)) + 1
+    // 800 = 0x031F → bytes[24]=0x1F, bytes[25]=0x03, bytes[26]=0x00 → 0x031F = 799, +1 = 800
+    bytes[24] = 0x1f; bytes[25] = 0x03; bytes[26] = 0x00;
+    // Height = (data[7] | (data[8] << 8) | (data[9] << 16)) + 1
+    // 600 = 0x0257 → bytes[27]=0x57, bytes[28]=0x02, bytes[29]=0x00 → 0x0257 = 599, +1 = 600
+    bytes[27] = 0x57; bytes[28] = 0x02; bytes[29] = 0x00;
+
+    const dims = parseImageDimensions(bytes, 'image/webp');
+    expect(dims).toEqual({ width: 800, height: 600 });
+  });
+
+  it('parses GIF87a dimensions', () => {
+    // Minimal GIF: GIF87a + logical screen descriptor
+    const bytes = new Uint8Array([
+      0x47, 0x49, 0x46, 0x38, 0x37, 0x61, // GIF87a
+      0x00, 0x02, // width = 512 (little-endian)
+      0x00, 0x01, // height = 256 (little-endian)
+      0x70, 0x00, 0x00, // packed fields + bg color index + aspect ratio
+    ]);
+
+    const dims = parseImageDimensions(bytes, 'image/gif');
+    expect(dims).toEqual({ width: 512, height: 256 });
+  });
+
   it('returns null for unsupported media type', () => {
     const bytes = new Uint8Array([0x00]);
     const dims = parseImageDimensions(bytes, 'image/tiff');
@@ -687,6 +748,20 @@ describe('parseImageDimensions', () => {
     const bytes = new Uint8Array(2);
     const dims = parseImageDimensions(bytes, 'image/png');
     expect(dims).toBeNull();
+  });
+
+  it('handles case-insensitive media type (image/PNG)', () => {
+    const bytes = new Uint8Array(33);
+    const sig = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
+    for (let i = 0; i < 8; i++) bytes[i] = sig[i];
+    bytes[8] = 0x00; bytes[9] = 0x00; bytes[10] = 0x00; bytes[11] = 0x0d;
+    bytes[12] = 0x49; bytes[13] = 0x48; bytes[14] = 0x44; bytes[15] = 0x52;
+    bytes[16] = 0x00; bytes[17] = 0x00; bytes[18] = 0x07; bytes[19] = 0x80; // 1920
+    bytes[20] = 0x00; bytes[21] = 0x00; bytes[22] = 0x04; bytes[23] = 0x38; // 1080
+    bytes[24] = 8; bytes[25] = 2;
+
+    const dims = parseImageDimensions(bytes, 'image/PNG');
+    expect(dims).toEqual({ width: 1920, height: 1080 });
   });
 });
 
@@ -790,6 +865,24 @@ describe('AudioMinimizer', () => {
     if (!result.ok) return;
     expect(result.transformations).toEqual([]);
     expect(result.artifact.contentHash).toBe(artifact.contentHash);
+  });
+
+  it('handles audio/x-wav media type', () => {
+    const bytes = makeWavBytes(10); // 10 seconds
+    const artifact = makeBinaryArtifact(bytes, 'audio/x-wav');
+    const result = minimizer.minimize(artifact, AUDIO_SERVICE, fixedClock);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.transformations).toEqual([]);
+  });
+
+  it('handles case-insensitive WAV media type (audio/WAV)', () => {
+    const bytes = makeWavBytes(10);
+    const artifact = makeBinaryArtifact(bytes, 'audio/WAV');
+    const result = minimizer.minimize(artifact, AUDIO_SERVICE, fixedClock);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.transformations).toEqual([]);
   });
 
   it('returns minimization-unavailable for WAV over maxDuration', () => {

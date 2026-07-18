@@ -59,7 +59,7 @@ export function parseResolutionLimit(value: string): { width: number; height: nu
   if (!m) return null;
   const width = parseInt(m[1], 10);
   const height = parseInt(m[2], 10);
-  if (isNaN(width) || isNaN(height) || width < 0 || height < 0) return null;
+  if (isNaN(width) || isNaN(height) || width <= 0 || height <= 0) return null;
   return { width, height };
 }
 

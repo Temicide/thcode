@@ -26,8 +26,8 @@ function parsePngDimensions(bytes: Uint8Array): { width: number; height: number 
   if (bytes[12] !== 0x49 || bytes[13] !== 0x48 || bytes[14] !== 0x44 || bytes[15] !== 0x52) {
     return null;
   }
-  const width = (bytes[16] << 24) | (bytes[17] << 16) | (bytes[18] << 8) | bytes[19];
-  const height = (bytes[20] << 24) | (bytes[21] << 16) | (bytes[22] << 8) | bytes[23];
+  const width = ((bytes[16] << 24) | (bytes[17] << 16) | (bytes[18] << 8) | bytes[19]) >>> 0;
+  const height = ((bytes[20] << 24) | (bytes[21] << 16) | (bytes[22] << 8) | bytes[23]) >>> 0;
   if (width <= 0 || height <= 0) return null;
   return { width, height };
 }
@@ -57,11 +57,23 @@ function parseJpegDimensions(bytes: Uint8Array): { width: number; height: number
       offset += 2;
       continue;
     }
+    // Parameterless markers: restart markers (0xD0-0xD7) and TEM (0x01)
+    // have no length field — just the marker byte.
+    if (marker === 0x01 || (marker >= 0xd0 && marker <= 0xd7)) {
+      offset += 2;
+      continue;
+    }
+    // SOS (Start Of Scan, 0xDA) — compressed data follows; stop scanning
+    // because entropy-coded bytes can mimic markers.
+    if (marker === 0xda) {
+      return null;
+    }
     // Check if this is an SOF marker (0xC0..0xCF, excluding 0xC4, 0xC8, 0xCC).
     if (marker >= 0xc0 && marker <= 0xcf && marker !== 0xc4 && marker !== 0xc8 && marker !== 0xcc) {
       if (offset + 8 >= bytes.length) return null;
       const segLen = ((bytes[offset + 2] << 8) | bytes[offset + 3]) & 0xffff;
-      if (segLen < 5) return null;
+      // Minimum valid SOF segment: 2 (length) + 1 (precision) + 2 (height) + 2 (width) + 1 (components) = 8
+      if (segLen < 8) return null;
       const height = (bytes[offset + 5] << 8) | bytes[offset + 6];
       const width = (bytes[offset + 7] << 8) | bytes[offset + 8];
       if (width <= 0 || height <= 0) return null;
@@ -148,6 +160,9 @@ function parseWebpDimensions(bytes: Uint8Array): { width: number; height: number
 
     if (chunkId === 'VP8 ' && dataOffset + 10 <= bytes.length) {
       // VP8 key frame header: 10 bytes of uncompressed data.
+      // Bit 0 of the first byte is the key-frame flag (0 = key frame).
+      const isKeyFrame = (bytes[dataOffset] & 0x01) === 0;
+      if (!isKeyFrame) return null;
       const w = ((bytes[dataOffset + 6] | (bytes[dataOffset + 7] << 8)) & 0x3fff) + 1;
       const h = ((bytes[dataOffset + 8] | (bytes[dataOffset + 9] << 8)) & 0x3fff) + 1;
       if (w > 0 && h > 0) return { width: w, height: h };
@@ -186,7 +201,9 @@ export function parseImageDimensions(
   bytes: Uint8Array,
   mediaType: string,
 ): { width: number; height: number } | null {
-  switch (mediaType) {
+  // Normalize to lowercase for case-insensitive comparison.
+  const normalized = mediaType.toLowerCase();
+  switch (normalized) {
     case 'image/png':
       return parsePngDimensions(bytes);
     case 'image/jpeg':
