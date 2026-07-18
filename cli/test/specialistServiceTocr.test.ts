@@ -629,7 +629,7 @@ describe('TocrSpecialistHandler', () => {
     const { defaultSpecialistHandlers } = await import('../src/core/specialists/services/index.js');
     const handlers = defaultSpecialistHandlers();
 
-    expect(handlers).toHaveLength(2);
+    expect(handlers).toHaveLength(3);
     expect(handlers[0].serviceId).toBe(SERVICE_ID);
 
     // Verify the handler works through the adapter

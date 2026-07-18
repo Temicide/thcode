@@ -31,3 +31,6 @@
 - source_spec: `_bmad-output/implementation-artifacts/4-8-prepare-exact-payload-identity-and-independent-transfer-consent.md`
   summary: `buildConsentDialogSummary` takes full `PreparedArtifact[]` but only uses safe subset of fields — future code changes could accidentally leak artifact content.
   evidence: `cli/src/core/specialists/consent/dialog.ts` accepts `readonly PreparedArtifact[]` but only extracts `sourceIdentity.canonicalPath`, `mediaType`, `sizeBytes`, and `contentHash`. Should accept `readonly SafeSourceIdentity[]` instead.
+- source_spec: `_bmad-output/implementation-artifacts/4-12-integrate-extract-address-as-a-working-specialist-service.md`
+  summary: 4.10/4.11 confidence fields do not guard `Number.isFinite` — `JSON.parse('1e999')` yields `Infinity`, stored as a valid number, and `JSON.stringify(Infinity)` later produces `null`, silently corrupting Evidence.
+  evidence: `cli/src/core/specialists/services/tocr/tocrHandler.ts` and `cli/src/core/specialists/services/speech/speechHandler.ts` confidence present-checks use `typeof === 'number'` without `Number.isFinite`; the 4.12 handler was patched to add the finite check, but the two earlier handlers were already committed. Apply the same `&& Number.isFinite(...)` guard to 4.10/4.11 confidence fields for consistency.

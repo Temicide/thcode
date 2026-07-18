@@ -1,4 +1,4 @@
-// Unit tests for Story 4.11: Speech-to-Text Specialist Service handler.
+// Unit tests for Story 4.12: Extract Address Specialist Service handler.
 // Offline tests using InMemorySpecialistTransport. Covers every I/O matrix row + AC.
 
 import { describe, it, expect, beforeEach } from 'vitest';
@@ -16,16 +16,21 @@ import {
   type SpecialistInvocation,
   type CredentialScope,
 } from '../src/core/specialists/adapter/index.js';
-import { SpeechToTextSpecialistHandler } from '../src/core/specialists/services/speech/index.js';
+import { ExtractAddressSpecialistHandler } from '../src/core/specialists/services/address/index.js';
 import {
-  FIXTURE_WAV_BYTES,
-  EXPECTED_TRANSCRIPT,
+  FIXTURE_ADDRESS_TEXT,
+  EXPECTED_HOUSE_NUMBER,
+  EXPECTED_STREET,
+  EXPECTED_SUBDISTRICT,
+  EXPECTED_DISTRICT,
+  EXPECTED_PROVINCE,
+  EXPECTED_POSTAL_CODE,
   EXPECTED_CONFIDENCE,
-  EXPECTED_SEGMENTS,
-  buildSpeechResponse,
-} from '../src/core/specialists/services/speech/index.js';
+  EXPECTED_SOURCE_SPANS,
+  buildAddressResponse,
+} from '../src/core/specialists/services/address/index.js';
 import type { CapabilityRegistryEntry } from '../src/core/specialists/registry/types.js';
-import type { SpeechResponse } from '../src/core/specialists/services/speech/fixture.js';
+import type { AddressResponse } from '../src/core/specialists/services/address/fixture.js';
 import type { SpecialistHealthSnapshot, SpecialistEffectiveConfiguration } from '../src/core/specialists/health/types.js';
 import type { PreparedPayloadManifest, ConsentReference } from '../src/core/specialists/consent/index.js';
 import type { PreparedArtifact } from '../src/core/specialists/artifacts/types.js';
@@ -35,7 +40,7 @@ import { CoreApp } from '../src/core/app.js';
 // Constants
 // ---------------------------------------------------------------------------
 
-const SERVICE_ID = 'speech-to-text';
+const SERVICE_ID = 'extract-address';
 const STUB_SECRET_KEY = 'sk-test-secret-key-1234567890abcdef';
 
 // ---------------------------------------------------------------------------
@@ -57,14 +62,14 @@ function advanceClock(ms: number): void {
 
 function makeConfig(overrides?: Partial<SpecialistEffectiveConfiguration>): SpecialistEffectiveConfiguration {
   return {
-    id: 'specialist-gen-stt-001',
+    id: 'specialist-gen-addr-001',
     serviceId: SERVICE_ID,
-    endpoint: 'https://api.aiforthai.in.th/speech-to-text/v1',
+    endpoint: 'https://api.aiforthai.in.th/extract-address/v1',
     origin: 'aiforthai',
-    serviceMapping: 'speech-to-text',
+    serviceMapping: 'extract-address',
     credentialReferenceId: 'aiforthai',
     credentialRevision: 'rev-1',
-    credentialFingerprint: 'fp-stt-001',
+    credentialFingerprint: 'fp-addr-001',
     manifestVersion: 1,
     contractVersion: '1.0.0',
     adapterVersion: '1.0.0',
@@ -85,17 +90,17 @@ function makeConfig(overrides?: Partial<SpecialistEffectiveConfiguration>): Spec
 function makeRegistryEntry(overrides?: Partial<CapabilityRegistryEntry>): CapabilityRegistryEntry {
   return {
     id: SERVICE_ID,
-    upstreamId: 'aiforthai-speech-to-text',
-    nameThai: 'คำพูดเป็นข้อความ',
-    nameEnglish: 'Speech-to-Text',
-    searchTerms: ['speech', 'transcription', 'thai', 'audio'],
-    capabilities: ['speech-to-text'],
-    supportedInputs: ['audio/wav', 'audio/mpeg', 'audio/ogg', 'audio/flac', 'audio/mp4', 'audio/aac'],
-    inputLimits: { maxFileSize: '50MB' },
+    upstreamId: 'aiforthai-extract-address',
+    nameThai: 'แยกที่อยู่',
+    nameEnglish: 'Extract Address',
+    searchTerms: ['address', 'extract', 'thai', 'location'],
+    capabilities: ['extract-address'],
+    supportedInputs: ['text/plain', 'text/markdown', 'application/pdf', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'],
+    inputLimits: { maxFileSize: '10MB' },
     entitlement: 'ai-for-thai',
     evidenceLevel: 'full',
     observationDate: '2026-07-18',
-    endpoint: 'https://api.aiforthai.in.th/speech-to-text/v1',
+    endpoint: 'https://api.aiforthai.in.th/extract-address/v1',
     transportRules: {
       allowedProtocols: ['https'],
       requiresTls: true,
@@ -103,7 +108,7 @@ function makeRegistryEntry(overrides?: Partial<CapabilityRegistryEntry>): Capabi
     },
     privacyClassification: {
       category: 'public',
-      dataClasses: ['audio'],
+      dataClasses: ['text'],
       requiresConsent: true,
     },
     retentionClassification: {
@@ -133,8 +138,8 @@ function makeHealthSnapshot(overrides?: Partial<SpecialistHealthSnapshot>): Spec
   return {
     serviceId: SERVICE_ID,
     state: 'available',
-    generationId: 'specialist-gen-stt-001',
-    endpoint: 'https://api.aiforthai.in.th/speech-to-text/v1',
+    generationId: 'specialist-gen-addr-001',
+    endpoint: 'https://api.aiforthai.in.th/extract-address/v1',
     checkedAt: '2026-07-18T12:00:00.000Z',
     ...overrides,
   };
@@ -143,66 +148,66 @@ function makeHealthSnapshot(overrides?: Partial<SpecialistHealthSnapshot>): Spec
 function makeManifest(overrides?: Partial<PreparedPayloadManifest>): PreparedPayloadManifest {
   return {
     manifestVersion: 1,
-    sources: [{ identity: '@meeting.wav', sourceHash: 'wav-hash-001', mediaType: 'audio/wav', sizeBytes: FIXTURE_WAV_BYTES.length }],
+    sources: [{ identity: '@invoice.pdf', sourceHash: 'pdf-hash-001', mediaType: 'application/pdf', sizeBytes: 5000 }],
     classification: 'public',
-    purpose: 'Speech-to-text transcription',
+    purpose: 'Extract Thai address from document',
     transformation: { redactSecrets: true, extractTextOnly: true, stripActiveContent: true, reason: 'standard' },
-    recipient: { capabilityId: SERVICE_ID, capabilityVersion: '1.0.0', verifiedEndpoint: 'https://api.aiforthai.in.th/speech-to-text/v1', method: 'POST' },
+    recipient: { capabilityId: SERVICE_ID, capabilityVersion: '1.0.0', verifiedEndpoint: 'https://api.aiforthai.in.th/extract-address/v1', method: 'POST' },
     callCount: 1,
     retention: 'upstream-no-retention-verified',
-    operationId: 'op-stt-001',
+    operationId: 'op-addr-001',
     promptRoundId: 'round-1',
     expiresAt: null,
-    manifestDigest: 'manifest-digest-stt-001',
-    payloadByteDigest: 'payload-digest-stt-001',
+    manifestDigest: 'manifest-digest-addr-001',
+    payloadByteDigest: 'payload-digest-addr-001',
     ...overrides,
   };
 }
 
 function makeConsentReference(overrides?: Partial<ConsentReference>): ConsentReference {
   return {
-    consentId: 'consent-stt-001',
-    manifestDigest: 'manifest-digest-stt-001',
-    payloadByteDigest: 'payload-digest-stt-001',
+    consentId: 'consent-addr-001',
+    manifestDigest: 'manifest-digest-addr-001',
+    payloadByteDigest: 'payload-digest-addr-001',
     recipientCapabilityId: SERVICE_ID,
     recipientCapabilityVersion: '1.0.0',
-    verifiedEndpoint: 'https://api.aiforthai.in.th/speech-to-text/v1',
-    purpose: 'Speech-to-text transcription',
+    verifiedEndpoint: 'https://api.aiforthai.in.th/extract-address/v1',
+    purpose: 'Extract Thai address from document',
     grantedAt: '2026-07-18T12:00:00.000Z',
     expiresAt: null,
     ...overrides,
   };
 }
 
-function makeAudioArtifact(overrides?: Partial<PreparedArtifact>): PreparedArtifact {
+function makeTextArtifact(overrides?: Partial<PreparedArtifact>): PreparedArtifact {
   return {
-    reference: { raw: '@meeting.wav', canonical: '/workspace/meeting.wav' },
-    sourceIdentity: { path: '/workspace/meeting.wav', workspaceRoot: '/workspace', relativePath: 'meeting.wav', digest: 'wav-hash-001', version: null, platform: 'darwin', volume: 'test-vol', binding: 'bound' },
-    mediaType: 'audio/wav',
-    sizeBytes: FIXTURE_WAV_BYTES.length,
-    contentHash: 'content-hash-wav-001',
-    contentKind: 'bytes',
-    bytes: FIXTURE_WAV_BYTES,
+    reference: { raw: '@invoice.pdf', canonical: '/workspace/invoice.pdf' },
+    sourceIdentity: { path: '/workspace/invoice.pdf', workspaceRoot: '/workspace', relativePath: 'invoice.pdf', digest: 'pdf-hash-001', version: null, platform: 'darwin', volume: 'test-vol', binding: 'bound' },
+    mediaType: 'text/plain',
+    sizeBytes: FIXTURE_ADDRESS_TEXT.length,
+    contentHash: 'content-hash-addr-001',
+    contentKind: 'text',
+    text: FIXTURE_ADDRESS_TEXT,
     transformations: [],
     privacyClassification: 'public',
-    compatibility: { status: 'compatible', matchedInput: 'audio/wav' },
+    compatibility: { status: 'compatible', matchedInput: 'text/plain' },
     createdAt: '2026-07-18T12:00:00.000Z',
     ...overrides,
   };
 }
 
-function makeTextArtifact(overrides?: Partial<PreparedArtifact>): PreparedArtifact {
+function makeExtractedTextArtifact(overrides?: Partial<PreparedArtifact>): PreparedArtifact {
   return {
-    reference: { raw: '@note.txt', canonical: '/workspace/note.txt' },
-    sourceIdentity: { path: '/workspace/note.txt', workspaceRoot: '/workspace', relativePath: 'note.txt', digest: 'txt-hash-001', version: null, platform: 'darwin', volume: 'test-vol', binding: 'bound' },
-    mediaType: 'text/plain',
-    sizeBytes: 50,
-    contentHash: 'content-hash-txt-001',
+    reference: { raw: '@invoice.pdf', canonical: '/workspace/invoice.pdf' },
+    sourceIdentity: { path: '/workspace/invoice.pdf', workspaceRoot: '/workspace', relativePath: 'invoice.pdf', digest: 'pdf-hash-001', version: null, platform: 'darwin', volume: 'test-vol', binding: 'bound' },
+    mediaType: 'application/pdf',
+    sizeBytes: 5000,
+    contentHash: 'content-hash-addr-extracted-001',
     contentKind: 'text',
-    text: 'Hello, world!',
-    transformations: [],
+    extractedText: FIXTURE_ADDRESS_TEXT,
+    transformations: [{ type: 'extract-text', description: 'PDF text extraction' }],
     privacyClassification: 'public',
-    compatibility: { status: 'compatible', matchedInput: 'text/plain' },
+    compatibility: { status: 'compatible', matchedInput: 'application/pdf' },
     createdAt: '2026-07-18T12:00:00.000Z',
     ...overrides,
   };
@@ -212,7 +217,7 @@ function makeRequest(overrides?: Partial<SpecialistRequest>): SpecialistRequest 
   const config = makeConfig();
   const manifest = makeManifest();
   const consentRef = makeConsentReference();
-  const artifacts = [makeAudioArtifact()];
+  const artifacts = [makeTextArtifact()];
   return {
     serviceId: SERVICE_ID,
     contractVersion: '1.0.0',
@@ -220,7 +225,7 @@ function makeRequest(overrides?: Partial<SpecialistRequest>): SpecialistRequest 
     effectiveConfiguration: config,
     preparedManifest: manifest,
     consentReference: consentRef,
-    operationId: 'op-stt-001',
+    operationId: 'op-addr-001',
     preparedArtifacts: artifacts,
     options: { timeoutMs: 30000, maxRetries: 0 },
     startedAt: clock(),
@@ -274,7 +279,7 @@ function rawResponse(overrides: Partial<SpecialistRawResponse> & { status: numbe
 // Tests
 // ---------------------------------------------------------------------------
 
-describe('SpeechToTextSpecialistHandler', () => {
+describe('ExtractAddressSpecialistHandler', () => {
   let transport: InMemorySpecialistTransport;
   let adapter: SharedSpecialistAdapter;
 
@@ -285,17 +290,17 @@ describe('SpeechToTextSpecialistHandler', () => {
       transport,
       clock,
       resolveRawKey: async () => STUB_SECRET_KEY,
-      handlers: [new SpeechToTextSpecialistHandler()],
+      handlers: [new ExtractAddressSpecialistHandler()],
     });
   });
 
   // -----------------------------------------------------------------------
-  // 1. Happy path audio
+  // 1. Happy path — full address
   // -----------------------------------------------------------------------
 
-  it('should return a SpecialistResult with full attribution for a valid audio request', async () => {
+  it('should return a SpecialistResult with all six address components for a valid text request', async () => {
     transport.registerDefaultResponder((_req) =>
-      successResponse(buildSpeechResponse()),
+      successResponse(buildAddressResponse()),
     );
 
     const request = makeRequest();
@@ -309,17 +314,42 @@ describe('SpeechToTextSpecialistHandler', () => {
 
     const r = result as SpecialistResult;
     expect(r.serviceId).toBe(SERVICE_ID);
-    expect(r.serviceIdentity.nameEnglish).toBe('Speech-to-Text');
-    expect(r.serviceIdentity.nameThai).toBe('คำพูดเป็นข้อความ');
-    expect(r.configurationGenerationId).toBe('specialist-gen-stt-001');
-    expect(r.consentReference.consentId).toBe('consent-stt-001');
-    expect(r.sourceContentHash).toBe('payload-digest-stt-001');
+    expect(r.serviceIdentity.nameEnglish).toBe('Extract Address');
+    expect(r.serviceIdentity.nameThai).toBe('แยกที่อยู่');
+    expect(r.configurationGenerationId).toBe('specialist-gen-addr-001');
+    expect(r.consentReference.consentId).toBe('consent-addr-001');
+    expect(r.sourceContentHash).toBe('payload-digest-addr-001');
 
-    // Check transcript field
-    expect(r.fields.transcript).toBeDefined();
-    expect(r.fields.transcript!.kind).toBe('text');
-    expect(r.fields.transcript!.value).toBe(EXPECTED_TRANSCRIPT);
-    expect(r.fields.transcript!.present).toBe(true);
+    // Check all six address components
+    expect(r.fields.houseNumber).toBeDefined();
+    expect(r.fields.houseNumber!.kind).toBe('text');
+    expect(r.fields.houseNumber!.value).toBe(EXPECTED_HOUSE_NUMBER);
+    expect(r.fields.houseNumber!.present).toBe(true);
+
+    expect(r.fields.street).toBeDefined();
+    expect(r.fields.street!.kind).toBe('text');
+    expect(r.fields.street!.value).toBe(EXPECTED_STREET);
+    expect(r.fields.street!.present).toBe(true);
+
+    expect(r.fields.subdistrict).toBeDefined();
+    expect(r.fields.subdistrict!.kind).toBe('text');
+    expect(r.fields.subdistrict!.value).toBe(EXPECTED_SUBDISTRICT);
+    expect(r.fields.subdistrict!.present).toBe(true);
+
+    expect(r.fields.district).toBeDefined();
+    expect(r.fields.district!.kind).toBe('text');
+    expect(r.fields.district!.value).toBe(EXPECTED_DISTRICT);
+    expect(r.fields.district!.present).toBe(true);
+
+    expect(r.fields.province).toBeDefined();
+    expect(r.fields.province!.kind).toBe('text');
+    expect(r.fields.province!.value).toBe(EXPECTED_PROVINCE);
+    expect(r.fields.province!.present).toBe(true);
+
+    expect(r.fields.postalCode).toBeDefined();
+    expect(r.fields.postalCode!.kind).toBe('text');
+    expect(r.fields.postalCode!.value).toBe(EXPECTED_POSTAL_CODE);
+    expect(r.fields.postalCode!.present).toBe(true);
 
     // Check confidence field
     expect(r.fields.confidence).toBeDefined();
@@ -327,24 +357,26 @@ describe('SpeechToTextSpecialistHandler', () => {
     expect(r.fields.confidence!.value).toBe(EXPECTED_CONFIDENCE);
     expect(r.fields.confidence!.present).toBe(true);
 
-    // Check segments field (structured — wrapped in { items: [...] })
-    expect(r.fields.segments).toBeDefined();
-    expect(r.fields.segments!.kind).toBe('structured');
-    expect(r.fields.segments!.present).toBe(true);
-    const segsValue = r.fields.segments!.value as Readonly<Record<string, unknown>>;
-    const segs = segsValue.items as readonly Record<string, unknown>[];
-    expect(segs).toHaveLength(EXPECTED_SEGMENTS.length);
-    expect(segs[0].text).toBe(EXPECTED_SEGMENTS[0].text);
-    expect(segs[0].start).toBe(EXPECTED_SEGMENTS[0].start);
-    expect(segs[0].end).toBe(EXPECTED_SEGMENTS[0].end);
-    expect(segs[1].text).toBe(EXPECTED_SEGMENTS[1].text);
-    expect(segs[1].start).toBe(EXPECTED_SEGMENTS[1].start);
-    expect(segs[1].end).toBe(EXPECTED_SEGMENTS[1].end);
+    // Check sourceSpans field (structured — wrapped in { items: [...] })
+    expect(r.fields.sourceSpans).toBeDefined();
+    expect(r.fields.sourceSpans!.kind).toBe('structured');
+    expect(r.fields.sourceSpans!.present).toBe(true);
+    const spansValue = r.fields.sourceSpans!.value as Readonly<Record<string, unknown>>;
+    const spans = spansValue.items as readonly Record<string, unknown>[];
+    expect(spans).toHaveLength(EXPECTED_SOURCE_SPANS.length);
+    expect(spans[0].field).toBe(EXPECTED_SOURCE_SPANS[0].field);
+    expect(spans[0].offset).toBe(EXPECTED_SOURCE_SPANS[0].offset);
+    expect(spans[0].length).toBe(EXPECTED_SOURCE_SPANS[0].length);
 
     // Check emptyFields excludes present fields
-    expect(r.emptyFields).not.toContain('transcript');
+    expect(r.emptyFields).not.toContain('houseNumber');
+    expect(r.emptyFields).not.toContain('street');
+    expect(r.emptyFields).not.toContain('subdistrict');
+    expect(r.emptyFields).not.toContain('district');
+    expect(r.emptyFields).not.toContain('province');
+    expect(r.emptyFields).not.toContain('postalCode');
     expect(r.emptyFields).not.toContain('confidence');
-    expect(r.emptyFields).not.toContain('segments');
+    expect(r.emptyFields).not.toContain('sourceSpans');
 
     // Check confidence at top level
     expect(r.confidence).toBe(EXPECTED_CONFIDENCE);
@@ -355,7 +387,7 @@ describe('SpeechToTextSpecialistHandler', () => {
     expect(r.timing.elapsedMs).toBeGreaterThanOrEqual(0);
 
     // Check provenance
-    expect(r.provenance.endpoint).toBe('https://api.aiforthai.in.th/speech-to-text/v1');
+    expect(r.provenance.endpoint).toBe('https://api.aiforthai.in.th/extract-address/v1');
     expect(r.provenance.method).toBe('POST');
     expect(r.provenance.status).toBe(200);
 
@@ -366,12 +398,17 @@ describe('SpeechToTextSpecialistHandler', () => {
   });
 
   // -----------------------------------------------------------------------
-  // 2. Response missing segments
+  // 2. Partial address — only province and postalCode
   // -----------------------------------------------------------------------
 
-  it('should mark segments as present:false when response omits segments', async () => {
+  it('should return only present components for a partial address (no fabricated components)', async () => {
     transport.registerDefaultResponder((_req) =>
-      successResponse(buildSpeechResponse({ segments: undefined })),
+      successResponse(buildAddressResponse({
+        address: {
+          province: EXPECTED_PROVINCE,
+          postalCode: EXPECTED_POSTAL_CODE,
+        },
+      })),
     );
 
     const request = makeRequest();
@@ -383,33 +420,101 @@ describe('SpeechToTextSpecialistHandler', () => {
     expect((result as SpecialistResult).ok).toBe(true);
     const r = result as SpecialistResult;
 
-    // transcript should be present
-    expect(r.fields.transcript).toBeDefined();
-    expect(r.fields.transcript!.present).toBe(true);
+    // province and postalCode should be present
+    expect(r.fields.province).toBeDefined();
+    expect(r.fields.province!.present).toBe(true);
+    expect(r.fields.province!.value).toBe(EXPECTED_PROVINCE);
 
-    // confidence should be present
-    expect(r.fields.confidence).toBeDefined();
-    expect(r.fields.confidence!.present).toBe(true);
+    expect(r.fields.postalCode).toBeDefined();
+    expect(r.fields.postalCode!.present).toBe(true);
+    expect(r.fields.postalCode!.value).toBe(EXPECTED_POSTAL_CODE);
 
-    // segments should be absent
-    expect(r.fields.segments).toBeDefined();
-    expect(r.fields.segments!.kind).toBe('structured');
-    expect(r.fields.segments!.value).toEqual({});
-    expect(r.fields.segments!.present).toBe(false);
+    // houseNumber, street, subdistrict, district should be present:false
+    expect(r.fields.houseNumber).toBeDefined();
+    expect(r.fields.houseNumber!.present).toBe(false);
+    expect(r.fields.houseNumber!.value).toBe('');
 
-    // segments should be in emptyFields
-    expect(r.emptyFields).toContain('segments');
-    expect(r.emptyFields).not.toContain('transcript');
-    expect(r.emptyFields).not.toContain('confidence');
+    expect(r.fields.street).toBeDefined();
+    expect(r.fields.street!.present).toBe(false);
+    expect(r.fields.street!.value).toBe('');
+
+    expect(r.fields.subdistrict).toBeDefined();
+    expect(r.fields.subdistrict!.present).toBe(false);
+    expect(r.fields.subdistrict!.value).toBe('');
+
+    expect(r.fields.district).toBeDefined();
+    expect(r.fields.district!.present).toBe(false);
+    expect(r.fields.district!.value).toBe('');
+
+    // emptyFields should contain the absent components
+    expect(r.emptyFields).toContain('houseNumber');
+    expect(r.emptyFields).toContain('street');
+    expect(r.emptyFields).toContain('subdistrict');
+    expect(r.emptyFields).toContain('district');
+    expect(r.emptyFields).not.toContain('province');
+    expect(r.emptyFields).not.toContain('postalCode');
+
+    // No fabricated components — values should not be the expected ones
+    expect(r.fields.houseNumber!.value).not.toBe(EXPECTED_HOUSE_NUMBER);
+    expect(r.fields.street!.value).not.toBe(EXPECTED_STREET);
+    expect(r.fields.subdistrict!.value).not.toBe(EXPECTED_SUBDISTRICT);
+    expect(r.fields.district!.value).not.toBe(EXPECTED_DISTRICT);
   });
 
   // -----------------------------------------------------------------------
-  // 3. Response missing confidence
+  // 3. Empty component value
+  // -----------------------------------------------------------------------
+
+  it('should mark street as present:false when street is empty string', async () => {
+    transport.registerDefaultResponder((_req) =>
+      successResponse(buildAddressResponse({
+        address: {
+          houseNumber: EXPECTED_HOUSE_NUMBER,
+          street: '',
+          subdistrict: EXPECTED_SUBDISTRICT,
+          district: EXPECTED_DISTRICT,
+          province: EXPECTED_PROVINCE,
+          postalCode: EXPECTED_POSTAL_CODE,
+        },
+      })),
+    );
+
+    const request = makeRequest();
+    const entry = makeRegistryEntry();
+    const health = makeHealthSnapshot();
+
+    const result = await adapter.invoke(request, entry, health);
+
+    expect((result as SpecialistResult).ok).toBe(true);
+    const r = result as SpecialistResult;
+
+    // street should be present:false (empty)
+    expect(r.fields.street).toBeDefined();
+    expect(r.fields.street!.kind).toBe('text');
+    expect(r.fields.street!.value).toBe('');
+    expect(r.fields.street!.present).toBe(false);
+
+    // street should be in emptyFields
+    expect(r.emptyFields).toContain('street');
+
+    // Other components should still be present
+    expect(r.fields.houseNumber!.present).toBe(true);
+    expect(r.fields.subdistrict!.present).toBe(true);
+    expect(r.fields.district!.present).toBe(true);
+    expect(r.fields.province!.present).toBe(true);
+    expect(r.fields.postalCode!.present).toBe(true);
+
+    // No fabricated street value
+    expect(r.fields.street!.value).not.toBe(EXPECTED_STREET);
+  });
+
+  // -----------------------------------------------------------------------
+  // 4. Missing confidence
   // -----------------------------------------------------------------------
 
   it('should mark confidence as present:false when response omits confidence', async () => {
     transport.registerDefaultResponder((_req) =>
-      successResponse(buildSpeechResponse({ confidence: undefined })),
+      successResponse(buildAddressResponse({ confidence: undefined })),
     );
 
     const request = makeRequest();
@@ -421,13 +526,13 @@ describe('SpeechToTextSpecialistHandler', () => {
     expect((result as SpecialistResult).ok).toBe(true);
     const r = result as SpecialistResult;
 
-    // transcript should be present
-    expect(r.fields.transcript).toBeDefined();
-    expect(r.fields.transcript!.present).toBe(true);
-
-    // segments should be present
-    expect(r.fields.segments).toBeDefined();
-    expect(r.fields.segments!.present).toBe(true);
+    // All address components should be present
+    expect(r.fields.houseNumber!.present).toBe(true);
+    expect(r.fields.street!.present).toBe(true);
+    expect(r.fields.subdistrict!.present).toBe(true);
+    expect(r.fields.district!.present).toBe(true);
+    expect(r.fields.province!.present).toBe(true);
+    expect(r.fields.postalCode!.present).toBe(true);
 
     // confidence should be absent
     expect(r.fields.confidence).toBeDefined();
@@ -437,20 +542,20 @@ describe('SpeechToTextSpecialistHandler', () => {
 
     // confidence should be in emptyFields
     expect(r.emptyFields).toContain('confidence');
-    expect(r.emptyFields).not.toContain('transcript');
-    expect(r.emptyFields).not.toContain('segments');
+    expect(r.emptyFields).not.toContain('houseNumber');
+    expect(r.emptyFields).not.toContain('street');
 
     // Top-level confidence should be undefined
     expect(r.confidence).toBeUndefined();
   });
 
   // -----------------------------------------------------------------------
-  // 4. Empty transcript
+  // 5. Source spans provided
   // -----------------------------------------------------------------------
 
-  it('should mark transcript as present:false when transcript is empty string', async () => {
+  it('should keep sourceSpans verbatim when provided', async () => {
     transport.registerDefaultResponder((_req) =>
-      successResponse(buildSpeechResponse({ transcript: '' })),
+      successResponse(buildAddressResponse()),
     );
 
     const request = makeRequest();
@@ -462,21 +567,23 @@ describe('SpeechToTextSpecialistHandler', () => {
     expect((result as SpecialistResult).ok).toBe(true);
     const r = result as SpecialistResult;
 
-    // transcript should be present:false (empty)
-    expect(r.fields.transcript).toBeDefined();
-    expect(r.fields.transcript!.kind).toBe('text');
-    expect(r.fields.transcript!.value).toBe('');
-    expect(r.fields.transcript!.present).toBe(false);
-
-    // transcript should be in emptyFields
-    expect(r.emptyFields).toContain('transcript');
-
-    // No fabricated text
-    expect(r.fields.transcript!.value).not.toBe(EXPECTED_TRANSCRIPT);
+    expect(r.fields.sourceSpans).toBeDefined();
+    expect(r.fields.sourceSpans!.kind).toBe('structured');
+    expect(r.fields.sourceSpans!.present).toBe(true);
+    const spansValue = r.fields.sourceSpans!.value as Readonly<Record<string, unknown>>;
+    const spans = spansValue.items as readonly Record<string, unknown>[];
+    expect(spans).toHaveLength(EXPECTED_SOURCE_SPANS.length);
+    // Verify verbatim content
+    expect(spans[0]).toEqual({ field: 'houseNumber', offset: 0, length: 6 });
+    expect(spans[1]).toEqual({ field: 'street', offset: 16, length: 10 });
+    expect(spans[2]).toEqual({ field: 'subdistrict', offset: 27, length: 10 });
+    expect(spans[3]).toEqual({ field: 'district', offset: 38, length: 10 });
+    expect(spans[4]).toEqual({ field: 'province', offset: 49, length: 15 });
+    expect(spans[5]).toEqual({ field: 'postalCode', offset: 65, length: 5 });
   });
 
   // -----------------------------------------------------------------------
-  // 5. Malformed response body
+  // 6. Malformed response body
   // -----------------------------------------------------------------------
 
   it('should return malformed-response failure for non-JSON body', async () => {
@@ -529,14 +636,25 @@ describe('SpeechToTextSpecialistHandler', () => {
   });
 
   // -----------------------------------------------------------------------
-  // 6. No audio bytes (text artifact)
+  // 7. No text artifact
   // -----------------------------------------------------------------------
 
-  it('should return unknown-outcome failure when artifact has no audio bytes', async () => {
-    // Create a request with a text artifact (no bytes) but with a supported
-    // media type so it passes validation.
-    const textArtifact = makeTextArtifact({ mediaType: 'audio/wav' });
-    const request = makeRequest({ preparedArtifacts: [textArtifact] });
+  it('should return unknown-outcome failure when artifact has no text or extractedText', async () => {
+    // Create a request with a bytes artifact (no text)
+    const bytesArtifact: PreparedArtifact = {
+      reference: { raw: '@invoice.pdf', canonical: '/workspace/invoice.pdf' },
+      sourceIdentity: { path: '/workspace/invoice.pdf', workspaceRoot: '/workspace', relativePath: 'invoice.pdf', digest: 'pdf-hash-001', version: null, platform: 'darwin', volume: 'test-vol', binding: 'bound' },
+      mediaType: 'application/pdf',
+      sizeBytes: 5000,
+      contentHash: 'content-hash-pdf-001',
+      contentKind: 'bytes',
+      bytes: new Uint8Array([0x25, 0x50, 0x44, 0x46]),
+      transformations: [],
+      privacyClassification: 'public',
+      compatibility: { status: 'compatible', matchedInput: 'application/pdf' },
+      createdAt: '2026-07-18T12:00:00.000Z',
+    };
+    const request = makeRequest({ preparedArtifacts: [bytesArtifact] });
     const entry = makeRegistryEntry();
     const health = makeHealthSnapshot();
 
@@ -549,7 +667,7 @@ describe('SpeechToTextSpecialistHandler', () => {
   });
 
   // -----------------------------------------------------------------------
-  // 7. Transport timeout
+  // 8. Transport timeout
   // -----------------------------------------------------------------------
 
   it('should return timeout failure for transport timeout', async () => {
@@ -568,7 +686,7 @@ describe('SpeechToTextSpecialistHandler', () => {
   });
 
   // -----------------------------------------------------------------------
-  // 8. Unauthorized 401
+  // 9. Unauthorized 401
   // -----------------------------------------------------------------------
 
   it('should return unauthorized failure for HTTP 401', async () => {
@@ -587,7 +705,7 @@ describe('SpeechToTextSpecialistHandler', () => {
   });
 
   // -----------------------------------------------------------------------
-  // 9. Raw key never leaks
+  // 10. Raw key never leaks
   // -----------------------------------------------------------------------
 
   it('should never leak the raw key in transport request headersSummary, result, or failure', async () => {
@@ -597,7 +715,7 @@ describe('SpeechToTextSpecialistHandler', () => {
     transport.registerDefaultResponder((req) => {
       capturedHeadersSummary = req.headersSummary;
       capturedFetchHeaders = req.fetchHeaders;
-      return successResponse(buildSpeechResponse());
+      return successResponse(buildAddressResponse());
     });
 
     const request = makeRequest();
@@ -629,7 +747,7 @@ describe('SpeechToTextSpecialistHandler', () => {
   });
 
   // -----------------------------------------------------------------------
-  // 10. Handler registered via defaultSpecialistHandlers
+  // 11. Handler registered via defaultSpecialistHandlers
   // -----------------------------------------------------------------------
 
   it('should be registered in defaultSpecialistHandlers and resolvable by the adapter', async () => {
@@ -637,12 +755,12 @@ describe('SpeechToTextSpecialistHandler', () => {
     const handlers = defaultSpecialistHandlers();
 
     expect(handlers).toHaveLength(3);
-    expect(handlers.find(h => h.serviceId === 'speech-to-text')).toBeDefined();
+    expect(handlers.find(h => h.serviceId === 'extract-address')).toBeDefined();
 
     // Verify the handler works through the adapter
     const testTransport = new InMemorySpecialistTransport();
     testTransport.registerDefaultResponder((_req) =>
-      successResponse(buildSpeechResponse()),
+      successResponse(buildAddressResponse()),
     );
 
     const testAdapter = new SharedSpecialistAdapter({
@@ -661,13 +779,13 @@ describe('SpeechToTextSpecialistHandler', () => {
     expect((result as SpecialistResult).ok).toBe(true);
     const r = result as SpecialistResult;
     expect(r.serviceId).toBe(SERVICE_ID);
-    expect(r.fields.transcript).toBeDefined();
-    expect(r.fields.transcript!.present).toBe(true);
-    expect(r.fields.transcript!.value).toBe(EXPECTED_TRANSCRIPT);
+    expect(r.fields.houseNumber).toBeDefined();
+    expect(r.fields.houseNumber!.present).toBe(true);
+    expect(r.fields.houseNumber!.value).toBe(EXPECTED_HOUSE_NUMBER);
   });
 
   // -----------------------------------------------------------------------
-  // 11. App test seam: setSpecialistTransportForTest
+  // 12. App test seam: setSpecialistTransportForTest
   // -----------------------------------------------------------------------
 
   it('should accept a transport override via setSpecialistTransportForTest', () => {
@@ -682,7 +800,7 @@ describe('SpeechToTextSpecialistHandler', () => {
   });
 
   // -----------------------------------------------------------------------
-  // Transport network error
+  // 13. Transport network error
   // -----------------------------------------------------------------------
 
   it('should return transport failure for network error', async () => {
@@ -701,7 +819,7 @@ describe('SpeechToTextSpecialistHandler', () => {
   });
 
   // -----------------------------------------------------------------------
-  // HTTP 403
+  // 14. HTTP 403
   // -----------------------------------------------------------------------
 
   it('should return forbidden failure for HTTP 403', async () => {
@@ -720,7 +838,7 @@ describe('SpeechToTextSpecialistHandler', () => {
   });
 
   // -----------------------------------------------------------------------
-  // HTTP 404
+  // 15. HTTP 404
   // -----------------------------------------------------------------------
 
   it('should return not-found failure for HTTP 404', async () => {
@@ -739,7 +857,7 @@ describe('SpeechToTextSpecialistHandler', () => {
   });
 
   // -----------------------------------------------------------------------
-  // Quota 429 (no auto-retry, no quarantine assertion)
+  // 16. Quota 429
   // -----------------------------------------------------------------------
 
   it('should return rate-limited failure for HTTP 429', async () => {
@@ -758,7 +876,7 @@ describe('SpeechToTextSpecialistHandler', () => {
   });
 
   // -----------------------------------------------------------------------
-  // HTTP 5xx
+  // 17. HTTP 5xx
   // -----------------------------------------------------------------------
 
   it('should return server-error failure for HTTP 500', async () => {
@@ -777,7 +895,7 @@ describe('SpeechToTextSpecialistHandler', () => {
   });
 
   // -----------------------------------------------------------------------
-  // Handler not registered
+  // 18. Handler not registered
   // -----------------------------------------------------------------------
 
   it('should refuse with handler-not-registered when no handler is registered', async () => {
@@ -798,7 +916,7 @@ describe('SpeechToTextSpecialistHandler', () => {
   });
 
   // -----------------------------------------------------------------------
-  // Non-invokable entry
+  // 19. Non-invokable entry
   // -----------------------------------------------------------------------
 
   it('should refuse with non-invokable-entry when entry is not invokable', async () => {
@@ -813,13 +931,13 @@ describe('SpeechToTextSpecialistHandler', () => {
   });
 
   // -----------------------------------------------------------------------
-  // Unsupported input
+  // 20. Unsupported input
   // -----------------------------------------------------------------------
 
   it('should refuse with unsupported-input when artifact mediaType is not supported', async () => {
-    const artifact = makeAudioArtifact({ mediaType: 'application/pdf' });
+    const artifact = makeTextArtifact({ mediaType: 'image/png' });
     const request = makeRequest({ preparedArtifacts: [artifact] });
-    const entry = makeRegistryEntry({ supportedInputs: ['audio/wav', 'audio/mpeg'] });
+    const entry = makeRegistryEntry({ supportedInputs: ['text/plain', 'application/pdf'] });
     const health = makeHealthSnapshot();
 
     const result = await adapter.invoke(request, entry, health);
@@ -829,15 +947,15 @@ describe('SpeechToTextSpecialistHandler', () => {
   });
 
   // -----------------------------------------------------------------------
-  // buildTransportRequest produces correct body
+  // 21. buildTransportRequest produces correct body
   // -----------------------------------------------------------------------
 
-  it('should produce a transport request with base64-encoded audio and correct mime', async () => {
+  it('should produce a transport request with text body and correct content type', async () => {
     let capturedReq: SpecialistTransportRequest | null = null;
 
     transport.registerDefaultResponder((req) => {
       capturedReq = req;
-      return successResponse(buildSpeechResponse());
+      return successResponse(buildAddressResponse());
     });
 
     const request = makeRequest();
@@ -848,25 +966,20 @@ describe('SpeechToTextSpecialistHandler', () => {
 
     expect(capturedReq).not.toBeNull();
     expect(capturedReq!.method).toBe('POST');
-    expect(capturedReq!.url).toBe('https://api.aiforthai.in.th/speech-to-text/v1');
+    expect(capturedReq!.url).toBe('https://api.aiforthai.in.th/extract-address/v1');
     expect(capturedReq!.contentType).toBe('application/json');
     expect(capturedReq!.bodyKind).toBe('text');
     expect(capturedReq!.bodyText).toBeDefined();
 
     // Parse the body and verify structure
     const body = JSON.parse(capturedReq!.bodyText!);
-    expect(body.audio).toBeDefined();
-    expect(typeof body.audio).toBe('string');
-    // Verify it's valid base64
-    expect(() => Buffer.from(body.audio, 'base64')).not.toThrow();
-    // Verify the decoded bytes match the fixture
-    const decoded = Buffer.from(body.audio, 'base64');
-    expect(decoded).toEqual(Buffer.from(FIXTURE_WAV_BYTES));
-    expect(body.mime).toBe('audio/wav');
+    expect(body.text).toBeDefined();
+    expect(typeof body.text).toBe('string');
+    expect(body.text).toBe(FIXTURE_ADDRESS_TEXT);
   });
 
   // -----------------------------------------------------------------------
-  // buildTransportRequest uses resolveRawKey for Authorization
+  // 22. buildTransportRequest uses resolveRawKey for Authorization
   // -----------------------------------------------------------------------
 
   it('should use the resolved key for Authorization header', async () => {
@@ -874,7 +987,7 @@ describe('SpeechToTextSpecialistHandler', () => {
 
     transport.registerDefaultResponder((req) => {
       capturedFetchHeaders = req.fetchHeaders;
-      return successResponse(buildSpeechResponse());
+      return successResponse(buildAddressResponse());
     });
 
     const request = makeRequest();
@@ -889,7 +1002,7 @@ describe('SpeechToTextSpecialistHandler', () => {
   });
 
   // -----------------------------------------------------------------------
-  // Adapter never throws
+  // 23. Adapter never throws
   // -----------------------------------------------------------------------
 
   it('should not throw for a valid request', async () => {
@@ -901,13 +1014,12 @@ describe('SpeechToTextSpecialistHandler', () => {
   });
 
   // -----------------------------------------------------------------------
-  // Missing segments with non-object elements
+  // 24. Missing address object
   // -----------------------------------------------------------------------
 
-  it('should mark segments as present:false when segments contains only non-objects', async () => {
+  it('should mark all address components as present:false when address object is missing', async () => {
     transport.registerDefaultResponder((_req) =>
-      // Deliberately pass non-SpeechSegment elements to test per-element filtering
-      successResponse(buildSpeechResponse({ segments: ['not', 'objects'] } as Partial<SpeechResponse>)),
+      successResponse(buildAddressResponse({ address: undefined })),
     );
 
     const request = makeRequest();
@@ -919,20 +1031,30 @@ describe('SpeechToTextSpecialistHandler', () => {
     expect((result as SpecialistResult).ok).toBe(true);
     const r = result as SpecialistResult;
 
-    expect(r.fields.segments).toBeDefined();
-    expect(r.fields.segments!.kind).toBe('structured');
-    expect(r.fields.segments!.value).toEqual({});
-    expect(r.fields.segments!.present).toBe(false);
-    expect(r.emptyFields).toContain('segments');
+    // All address components should be present:false
+    expect(r.fields.houseNumber!.present).toBe(false);
+    expect(r.fields.street!.present).toBe(false);
+    expect(r.fields.subdistrict!.present).toBe(false);
+    expect(r.fields.district!.present).toBe(false);
+    expect(r.fields.province!.present).toBe(false);
+    expect(r.fields.postalCode!.present).toBe(false);
+
+    // All should be in emptyFields
+    expect(r.emptyFields).toContain('houseNumber');
+    expect(r.emptyFields).toContain('street');
+    expect(r.emptyFields).toContain('subdistrict');
+    expect(r.emptyFields).toContain('district');
+    expect(r.emptyFields).toContain('province');
+    expect(r.emptyFields).toContain('postalCode');
   });
 
   // -----------------------------------------------------------------------
-  // Empty segments array
+  // 25. Source spans with non-object elements
   // -----------------------------------------------------------------------
 
-  it('should mark segments as present:false when segments is an empty array', async () => {
+  it('should mark sourceSpans as present:false when sourceSpans contains only non-objects', async () => {
     transport.registerDefaultResponder((_req) =>
-      successResponse(buildSpeechResponse({ segments: [] })),
+      successResponse(buildAddressResponse({ sourceSpans: ['not', 'objects'] } as Partial<AddressResponse>)),
     );
 
     const request = makeRequest();
@@ -944,21 +1066,20 @@ describe('SpeechToTextSpecialistHandler', () => {
     expect((result as SpecialistResult).ok).toBe(true);
     const r = result as SpecialistResult;
 
-    expect(r.fields.segments).toBeDefined();
-    expect(r.fields.segments!.kind).toBe('structured');
-    expect(r.fields.segments!.value).toEqual({});
-    expect(r.fields.segments!.present).toBe(false);
-    expect(r.emptyFields).toContain('segments');
+    expect(r.fields.sourceSpans).toBeDefined();
+    expect(r.fields.sourceSpans!.kind).toBe('structured');
+    expect(r.fields.sourceSpans!.value).toEqual({});
+    expect(r.fields.sourceSpans!.present).toBe(false);
+    expect(r.emptyFields).toContain('sourceSpans');
   });
 
   // -----------------------------------------------------------------------
-  // Mixed valid + invalid segments
+  // 26. Empty sourceSpans array
   // -----------------------------------------------------------------------
 
-  it('should keep valid segments and drop invalid ones from a mixed array', async () => {
+  it('should mark sourceSpans as present:false when sourceSpans is an empty array', async () => {
     transport.registerDefaultResponder((_req) =>
-      // Deliberately mix valid SpeechSegment objects with invalid elements
-      successResponse(buildSpeechResponse({ segments: [{ text: 'hello' }, 'invalid', { text: 'world' }] } as Partial<SpeechResponse>)),
+      successResponse(buildAddressResponse({ sourceSpans: [] })),
     );
 
     const request = makeRequest();
@@ -970,14 +1091,144 @@ describe('SpeechToTextSpecialistHandler', () => {
     expect((result as SpecialistResult).ok).toBe(true);
     const r = result as SpecialistResult;
 
-    expect(r.fields.segments).toBeDefined();
-    expect(r.fields.segments!.kind).toBe('structured');
-    expect(r.fields.segments!.present).toBe(true);
-    const segsValue = r.fields.segments!.value as Readonly<Record<string, unknown>>;
-    const segs = segsValue.items as readonly Record<string, unknown>[];
-    expect(segs).toHaveLength(2);
-    expect(segs[0].text).toBe('hello');
-    expect(segs[1].text).toBe('world');
-    expect(r.emptyFields).not.toContain('segments');
+    expect(r.fields.sourceSpans).toBeDefined();
+    expect(r.fields.sourceSpans!.kind).toBe('structured');
+    expect(r.fields.sourceSpans!.value).toEqual({});
+    expect(r.fields.sourceSpans!.present).toBe(false);
+    expect(r.emptyFields).toContain('sourceSpans');
+  });
+
+  // -----------------------------------------------------------------------
+  // 27. Mixed valid + invalid sourceSpans
+  // -----------------------------------------------------------------------
+
+  it('should keep valid sourceSpans and drop invalid ones from a mixed array', async () => {
+    transport.registerDefaultResponder((_req) =>
+      successResponse(buildAddressResponse({
+        sourceSpans: [
+          { field: 'houseNumber', offset: 0, length: 6 },
+          'invalid',
+          { field: 'street', offset: 16, length: 10 },
+        ],
+      } as Partial<AddressResponse>)),
+    );
+
+    const request = makeRequest();
+    const entry = makeRegistryEntry();
+    const health = makeHealthSnapshot();
+
+    const result = await adapter.invoke(request, entry, health);
+
+    expect((result as SpecialistResult).ok).toBe(true);
+    const r = result as SpecialistResult;
+
+    expect(r.fields.sourceSpans).toBeDefined();
+    expect(r.fields.sourceSpans!.kind).toBe('structured');
+    expect(r.fields.sourceSpans!.present).toBe(true);
+    const spansValue = r.fields.sourceSpans!.value as Readonly<Record<string, unknown>>;
+    const spans = spansValue.items as readonly Record<string, unknown>[];
+    expect(spans).toHaveLength(2);
+    expect(spans[0].field).toBe('houseNumber');
+    expect(spans[1].field).toBe('street');
+    expect(r.emptyFields).not.toContain('sourceSpans');
+  });
+
+  // -----------------------------------------------------------------------
+  // 28. Null address object
+  // -----------------------------------------------------------------------
+
+  it('should mark all address components as present:false when address is null', async () => {
+    transport.registerDefaultResponder((_req) =>
+      successResponse(buildAddressResponse({ address: null })),
+    );
+
+    const request = makeRequest();
+    const entry = makeRegistryEntry();
+    const health = makeHealthSnapshot();
+
+    const result = await adapter.invoke(request, entry, health);
+
+    expect((result as SpecialistResult).ok).toBe(true);
+    const r = result as SpecialistResult;
+
+    // All address components should be present:false
+    expect(r.fields.houseNumber!.present).toBe(false);
+    expect(r.fields.street!.present).toBe(false);
+    expect(r.fields.subdistrict!.present).toBe(false);
+    expect(r.fields.district!.present).toBe(false);
+    expect(r.fields.province!.present).toBe(false);
+    expect(r.fields.postalCode!.present).toBe(false);
+
+    // All should be in emptyFields
+    expect(r.emptyFields).toContain('houseNumber');
+    expect(r.emptyFields).toContain('street');
+    expect(r.emptyFields).toContain('subdistrict');
+    expect(r.emptyFields).toContain('district');
+    expect(r.emptyFields).toContain('province');
+    expect(r.emptyFields).toContain('postalCode');
+  });
+
+  // -----------------------------------------------------------------------
+  // 29. extractedText fallback (PDF/DOCX extracted content)
+  // -----------------------------------------------------------------------
+
+  it('should read from extractedText when text is not available', async () => {
+    transport.registerDefaultResponder((_req) =>
+      successResponse(buildAddressResponse()),
+    );
+
+    // Use an artifact with extractedText but no text field
+    const extractedArtifact = makeExtractedTextArtifact();
+    const request = makeRequest({ preparedArtifacts: [extractedArtifact] });
+    const entry = makeRegistryEntry();
+    const health = makeHealthSnapshot();
+
+    const result = await adapter.invoke(request, entry, health);
+
+    expect((result as SpecialistResult).ok).toBe(true);
+    const r = result as SpecialistResult;
+    expect(r.fields.houseNumber!.present).toBe(true);
+    expect(r.fields.houseNumber!.value).toBe(EXPECTED_HOUSE_NUMBER);
+  });
+
+  // -----------------------------------------------------------------------
+  // 30. Non-string component value (should not String() it)
+  // -----------------------------------------------------------------------
+
+  it('should mark houseNumber as present:false when value is a number (non-string)', async () => {
+    transport.registerDefaultResponder((_req) =>
+      successResponse({
+        address: {
+          houseNumber: 12345,
+          street: EXPECTED_STREET,
+          subdistrict: EXPECTED_SUBDISTRICT,
+          district: EXPECTED_DISTRICT,
+          province: EXPECTED_PROVINCE,
+          postalCode: EXPECTED_POSTAL_CODE,
+        },
+        confidence: EXPECTED_CONFIDENCE,
+        sourceSpans: EXPECTED_SOURCE_SPANS.map(s => ({ ...s })),
+      }),
+    );
+
+    const request = makeRequest();
+    const entry = makeRegistryEntry();
+    const health = makeHealthSnapshot();
+
+    const result = await adapter.invoke(request, entry, health);
+
+    expect((result as SpecialistResult).ok).toBe(true);
+    const r = result as SpecialistResult;
+
+    // houseNumber should be present:false (non-string, not fabricated)
+    expect(r.fields.houseNumber).toBeDefined();
+    expect(r.fields.houseNumber!.kind).toBe('text');
+    expect(r.fields.houseNumber!.value).toBe('');
+    expect(r.fields.houseNumber!.present).toBe(false);
+    expect(r.emptyFields).toContain('houseNumber');
+
+    // Other components should still be present
+    expect(r.fields.street!.present).toBe(true);
+    expect(r.fields.street!.value).toBe(EXPECTED_STREET);
   });
 });
