@@ -1,26 +1,23 @@
 # Root .gitignore — applies across the whole thcode tree.
-# Aligned with project-context.md: never commit agent skills, local agent
-# config, OS cruft, build output, or secrets. BMAD planning artifacts
-# (_bmad/ and _bmad-output/) ARE committed by project policy.
+# BMAD planning artifacts (_bmad/ and _bmad-output/) are committed by project
+# policy; local agent tooling, OS cruft, generated output, and secrets are not.
 
-# Local agent skills/config — never committed
+# Local agent tooling
 .agents/
 .claude/
 
-# OS cruft
+# OS artifacts
 .DS_Store
 .DS_Store?
 **/.DS_Store
 Thumbs.db
 
-# Dependencies and build output (also covered by cli/.gitignore)
+# Dependencies and generated output (also covered by package-specific rules)
 node_modules/
 dist/
 *.tsbuildinfo
 
-# Secrets must never be committed (ADR 0007 BYOK) — runtime credentials live
-# only in the OS credential facility, outside this tree. This guards a stray
-# local .env.
+# Local credentials and secrets. Runtime credentials live outside this tree.
 .env
 .env.*
 *.pem
