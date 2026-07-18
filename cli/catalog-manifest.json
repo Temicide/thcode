@@ -1,0 +1,48 @@
+{
+  "manifestVersion": 1,
+  "observationDate": "2026-07-12",
+  "source": "https://aiforthai.in.th (reviewed snapshot; ADR 0011)",
+  "note": "Catalog presence is not API entitlement. All Phase-1 entries are 'catalogued': discoverable and inspectable, not claimed callable.",
+  "services": [
+    {
+      "id": "t-ocr",
+      "upstreamName": "T-OCR",
+      "category": "vision",
+      "modality": "image",
+      "endpoint": "https://api.aiforthai.in.th/ocr",
+      "supportLevel": "catalogued",
+      "description": "Thai text detection and recognition from images (OCR).",
+      "searchTerms": ["ocr", "อ่านตัวอักษร", "text recognition", "vision"]
+    },
+    {
+      "id": "speech-to-text",
+      "upstreamName": "Speech-to-Text",
+      "category": "conversation",
+      "modality": "audio",
+      "endpoint": "https://api.aiforthai.in.th/partii-webapi",
+      "supportLevel": "catalogued",
+      "description": "Thai automatic speech recognition (audio to text).",
+      "searchTerms": ["asr", "ถอดเสียง", "speech", "transcription"]
+    },
+    {
+      "id": "extract-address",
+      "upstreamName": "Extract Address",
+      "category": "other",
+      "modality": "text",
+      "endpoint": "https://api.aiforthai.in.th/textmedad",
+      "supportLevel": "catalogued",
+      "description": "Parse a Thai free-text address into structured components.",
+      "searchTerms": ["address", "ที่อยู่", "extraction", "structured"]
+    },
+    {
+      "id": "named-entity-recognition",
+      "upstreamName": "Named Entity Recognition",
+      "category": "language",
+      "modality": "text",
+      "endpoint": "https://api.aiforthai.in.th/thainer",
+      "supportLevel": "catalogued",
+      "description": "Thai named-entity recognition (people, places, organizations).",
+      "searchTerms": ["ner", "entity", "แยกชื่อ", "language"]
+    }
+  ]
+}

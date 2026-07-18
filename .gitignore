@@ -1,0 +1,29 @@
+# Root .gitignore — applies across the whole thcode tree.
+# BMAD planning artifacts (_bmad/ and _bmad-output/) are committed by project
+# policy; local agent tooling, OS cruft, generated output, and secrets are not.
+
+# Local agent tooling
+.agents/
+.claude/
+
+# OS artifacts
+.DS_Store
+.DS_Store?
+**/.DS_Store
+Thumbs.db
+
+# Dependencies and generated output (also covered by package-specific rules)
+node_modules/
+dist/
+*.tsbuildinfo
+
+# Local credentials and secrets. Runtime credentials live outside this tree.
+.env
+.env.*
+*.pem
+*.key
+secrets/
+
+# Logs
+*.log
+npm-debug.log*

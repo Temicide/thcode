@@ -1,0 +1,279 @@
+{
+  "manifestVersion": 1,
+  "observationDate": "2026-07-17",
+  "freshnessDays": 90,
+  "revoked": false,
+  "revocationReason": null,
+  "source": "https://aiforthai.in.th (reviewed snapshot; AD-15, Story 4.1)",
+  "entries": [
+    {
+      "id": "t-ocr",
+      "upstreamId": "ocr",
+      "nameThai": "ที-โอซีอาร์",
+      "nameEnglish": "T-OCR",
+      "searchTerms": ["ocr", "อ่านตัวอักษร", "text recognition", "vision", "optical character recognition"],
+      "capabilities": ["text-detection", "text-recognition", "thai-ocr"],
+      "supportedInputs": ["image/png", "image/jpeg", "image/tiff"],
+      "inputLimits": {
+        "maxFileSize": "20MB",
+        "maxResolution": "4000x4000"
+      },
+      "entitlement": "AI-for-Thai API key required",
+      "evidenceLevel": "deterministic",
+      "observationDate": "2026-07-17",
+      "endpoint": "https://api.aiforthai.in.th/ocr",
+      "transportRules": {
+        "allowedProtocols": ["https"],
+        "requiresTls": true,
+        "allowedMethods": ["POST"]
+      },
+      "privacyClassification": {
+        "category": "document-processing",
+        "dataClasses": ["image-content"],
+        "requiresConsent": true
+      },
+      "retentionClassification": {
+        "policy": "no-retention",
+        "providerDeletionSupported": false,
+        "defaultRetentionDays": null
+      },
+      "confirmationPolicy": {
+        "requiresExplicitConsent": true,
+        "scope": "per-transfer"
+      },
+      "manifestVersion": 1,
+      "contractVersion": "1.0.0",
+      "adapterVersion": "1.0.0",
+      "latestContractTestResult": {
+        "passed": true,
+        "testedAt": "2026-07-17T00:00:00.000Z",
+        "summary": "All contract tests pass for T-OCR v1.0.0"
+      },
+      "healthCanary": {
+        "kind": "static-capability-canary",
+        "dataClassification": "built-in-non-user",
+        "method": "POST",
+        "mediaType": "image/png",
+        "fixtureDigest": "c8af280b69cb50aa121299fbf0413fdf45b6ee1a58b3ce4f6da1776d1ed8e210",
+        "responseRule": "valid-service-response",
+        "contractVersion": "1.0.0",
+        "adapterVersion": "1.0.0"
+      },
+      "invokable": true,
+      "invokableStateReason": null
+    },
+    {
+      "id": "speech-to-text",
+      "upstreamId": "partii-webapi",
+      "nameThai": "แปลงเสียงเป็นข้อความ",
+      "nameEnglish": "Speech-to-Text",
+      "searchTerms": ["asr", "ถอดเสียง", "speech", "transcription", "audio-to-text"],
+      "capabilities": ["speech-recognition", "thai-asr", "audio-transcription"],
+      "supportedInputs": ["audio/wav", "audio/mpeg", "audio/ogg", "audio/flac"],
+      "inputLimits": {
+        "maxFileSize": "50MB",
+        "maxDuration": "120s"
+      },
+      "entitlement": "AI-for-Thai API key required",
+      "evidenceLevel": "deterministic",
+      "observationDate": "2026-07-17",
+      "endpoint": "https://api.aiforthai.in.th/partii-webapi",
+      "transportRules": {
+        "allowedProtocols": ["https"],
+        "requiresTls": true,
+        "allowedMethods": ["POST"]
+      },
+      "privacyClassification": {
+        "category": "audio-processing",
+        "dataClasses": ["audio-content"],
+        "requiresConsent": true
+      },
+      "retentionClassification": {
+        "policy": "no-retention",
+        "providerDeletionSupported": false,
+        "defaultRetentionDays": null
+      },
+      "confirmationPolicy": {
+        "requiresExplicitConsent": true,
+        "scope": "per-transfer"
+      },
+      "manifestVersion": 1,
+      "contractVersion": "1.0.0",
+      "adapterVersion": "1.0.0",
+      "latestContractTestResult": {
+        "passed": true,
+        "testedAt": "2026-07-17T00:00:00.000Z",
+        "summary": "All contract tests pass for Speech-to-Text v1.0.0"
+      },
+      "healthCanary": {
+        "kind": "static-capability-canary",
+        "dataClassification": "built-in-non-user",
+        "method": "POST",
+        "mediaType": "audio/wav",
+        "fixtureDigest": "4d83526d4156d5ab2afdcc8d1e4bdb3df412283a03bcb092bbc4d12149586755",
+        "responseRule": "valid-service-response",
+        "contractVersion": "1.0.0",
+        "adapterVersion": "1.0.0"
+      },
+      "invokable": true,
+      "invokableStateReason": null
+    },
+    {
+      "id": "extract-address",
+      "upstreamId": "textmedad",
+      "nameThai": "แยกที่อยู่",
+      "nameEnglish": "Extract Address",
+      "searchTerms": ["address", "ที่อยู่", "extraction", "structured", "thai-address"],
+      "capabilities": ["address-extraction", "thai-address-parsing", "structured-output"],
+      "supportedInputs": ["text/plain"],
+      "inputLimits": {
+        "maxTextLength": "10000",
+        "maxAddresses": "50"
+      },
+      "entitlement": "AI-for-Thai API key required",
+      "evidenceLevel": "deterministic",
+      "observationDate": "2026-07-17",
+      "endpoint": "https://api.aiforthai.in.th/textmedad",
+      "transportRules": {
+        "allowedProtocols": ["https"],
+        "requiresTls": true,
+        "allowedMethods": ["POST"]
+      },
+      "privacyClassification": {
+        "category": "text-processing",
+        "dataClasses": ["text-content"],
+        "requiresConsent": true
+      },
+      "retentionClassification": {
+        "policy": "no-retention",
+        "providerDeletionSupported": false,
+        "defaultRetentionDays": null
+      },
+      "confirmationPolicy": {
+        "requiresExplicitConsent": true,
+        "scope": "per-transfer"
+      },
+      "manifestVersion": 1,
+      "contractVersion": "1.0.0",
+      "adapterVersion": "1.0.0",
+      "latestContractTestResult": {
+        "passed": true,
+        "testedAt": "2026-07-17T00:00:00.000Z",
+        "summary": "All contract tests pass for Extract Address v1.0.0"
+      },
+      "healthCanary": {
+        "kind": "static-capability-canary",
+        "dataClassification": "built-in-non-user",
+        "method": "POST",
+        "mediaType": "text/plain",
+        "fixtureDigest": "c19b73451e86b3cfaba336fb4efabb5dfd33df657582ed160f5fd6a0888a4a5f",
+        "responseRule": "valid-service-response",
+        "contractVersion": "1.0.0",
+        "adapterVersion": "1.0.0"
+      },
+      "invokable": true,
+      "invokableStateReason": null
+    },
+    {
+      "id": "named-entity-recognition",
+      "upstreamId": "thainer",
+      "nameThai": "การรู้จำชื่อเฉพาะ",
+      "nameEnglish": "Named Entity Recognition",
+      "searchTerms": ["ner", "entity", "แยกชื่อ", "language", "thai-ner"],
+      "capabilities": ["named-entity-recognition", "thai-ner", "entity-extraction"],
+      "supportedInputs": ["text/plain"],
+      "inputLimits": {
+        "maxTextLength": "50000",
+        "maxEntities": "200"
+      },
+      "entitlement": "AI-for-Thai API key required",
+      "evidenceLevel": "deterministic",
+      "observationDate": "2026-07-17",
+      "endpoint": "https://api.aiforthai.in.th/thainer",
+      "transportRules": {
+        "allowedProtocols": ["https"],
+        "requiresTls": true,
+        "allowedMethods": ["POST"]
+      },
+      "privacyClassification": {
+        "category": "text-processing",
+        "dataClasses": ["text-content"],
+        "requiresConsent": true
+      },
+      "retentionClassification": {
+        "policy": "no-retention",
+        "providerDeletionSupported": false,
+        "defaultRetentionDays": null
+      },
+      "confirmationPolicy": {
+        "requiresExplicitConsent": true,
+        "scope": "per-transfer"
+      },
+      "manifestVersion": 1,
+      "contractVersion": "1.0.0",
+      "adapterVersion": "1.0.0",
+      "latestContractTestResult": {
+        "passed": true,
+        "testedAt": "2026-07-17T00:00:00.000Z",
+        "summary": "All contract tests pass for Named Entity Recognition v1.0.0"
+      },
+      "healthCanary": {
+        "kind": "static-capability-canary",
+        "dataClassification": "built-in-non-user",
+        "method": "POST",
+        "mediaType": "text/plain",
+        "fixtureDigest": "e6528fb4fa47a6d854954f4c9902529f413069b79d65c63ab24ee1db11fda2ee",
+        "responseRule": "valid-service-response",
+        "contractVersion": "1.0.0",
+        "adapterVersion": "1.0.0"
+      },
+      "invokable": true,
+      "invokableStateReason": null
+    },
+    {
+      "id": "typhoon-translate",
+      "upstreamId": "typhoon-translate",
+      "nameThai": "แปลภาษาไต้ฝุ่น",
+      "nameEnglish": "Typhoon Translate",
+      "searchTerms": ["translate", "แปลภาษา", "typhoon", "machine-translation"],
+      "capabilities": ["machine-translation", "thai-translation", "text-translation"],
+      "supportedInputs": ["text/plain"],
+      "inputLimits": {
+        "maxTextLength": "10000"
+      },
+      "entitlement": "AI-for-Thai API key required",
+      "evidenceLevel": "deterministic",
+      "observationDate": "2026-07-17",
+      "endpoint": "https://api.aiforthai.in.th/translate",
+      "transportRules": {
+        "allowedProtocols": ["https"],
+        "requiresTls": true,
+        "allowedMethods": ["POST"]
+      },
+      "privacyClassification": {
+        "category": "text-processing",
+        "dataClasses": ["text-content"],
+        "requiresConsent": true
+      },
+      "retentionClassification": {
+        "policy": "no-retention",
+        "providerDeletionSupported": false,
+        "defaultRetentionDays": null
+      },
+      "confirmationPolicy": {
+        "requiresExplicitConsent": true,
+        "scope": "per-transfer"
+      },
+      "manifestVersion": 1,
+      "contractVersion": "1.0.0",
+      "adapterVersion": "0.0.0",
+      "latestContractTestResult": {
+        "passed": false,
+        "testedAt": "2026-07-17T00:00:00.000Z",
+        "summary": "Contract tests not yet run for Typhoon Translate"
+      },
+      "invokable": false,
+      "invokableStateReason": "Catalogued — Not available yet"
+    }
+  ]
+}
