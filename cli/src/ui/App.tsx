@@ -71,11 +71,14 @@ export function App({ core }: AppProps) {
               '(Placeholder — interactive Permission Selector is a planned feature.)',
           );
           return;
-        case 'tools':
-          push('system', core.listCatalog().join('\n'));
-          return;
-        default:
-          push('system', `Unknown command: /${name}`);
+        default: {
+          // Slash commands must use the frozen CoreProtocol grammar so Ink,
+          // redirected output, and headless callers observe the same canonical
+          // `/context` and `/usage` projections (AD-2 + AD-7).
+          const result = core.dispatchCommand(cmd, { hasTty: true });
+          const text = [result.stdout, result.stderr].filter(Boolean).join('\n');
+          push('system', text || 'Command completed.');
+        }
       }
     },
     [core, exit, push],

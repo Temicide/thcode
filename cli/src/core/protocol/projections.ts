@@ -21,11 +21,33 @@ export interface SessionProjection {
   readonly lastActivity: string;
 }
 
+export interface ContextContributorProjection {
+  readonly itemId: string;
+  readonly role: 'user' | 'assistant' | 'system' | 'tool';
+  readonly inclusion: string;
+  readonly provenance: string;
+  readonly trust: string;
+  readonly estimatedTokens: number;
+  readonly measuredBytes: number;
+  readonly omittedReason?: string;
+}
 export interface ContextProjection {
   readonly estimatedTokens: number;
   readonly effectiveCapacity: number | 'percentage unavailable';
   readonly utilizationPercent: number | 'percentage unavailable';
   readonly pinnedTurnCount: number;
+  readonly contributors?: readonly ContextContributorProjection[];
+  readonly omissions?: readonly { readonly itemId: string; readonly reason: string }[];
+  readonly manifestId?: string | null;
+  readonly measurement?: string;
+}
+export interface UsageProjection {
+  readonly inputTokens: number;
+  readonly outputTokens: number;
+  readonly cachedInputTokens: number;
+  readonly calls: number;
+  readonly measurement: string;
+  readonly observations: readonly { readonly operationId: string; readonly modelId: string; readonly source: string; readonly observedAt: string }[];
 }
 
 export interface ArtifactProjection {

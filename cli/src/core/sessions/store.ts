@@ -1,4 +1,4 @@
-import { mkdirSync } from 'node:fs';
+import { existsSync, mkdirSync, statSync } from 'node:fs';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import Database from 'better-sqlite3';
@@ -14,6 +14,10 @@ import {
 } from './crypto.js';
 import { STORE_FORMAT_VERSION } from './formatVersion.js';
 import { JOURNAL_DDL } from './journal.js';
+import type { ContextExtensionEnvelope } from '../context/extensions.js';
+import { validateExtension } from '../context/extensions.js';
+import { recoverContextExtensions, type ContextRecoveryState } from '../context/recovery.js';
+import { newSessionId } from '../protocol/ids.js';
 
 const SCHEMA_VERSION = 1;
 
@@ -44,6 +48,8 @@ export interface TokenLedgerEntry {
   readonly modelId: string;
   readonly createdAt: string;
 }
+
+export interface ContextExtensionRecord { readonly id: string; readonly sessionId: string; readonly seq: number; readonly envelope: ContextExtensionEnvelope; readonly createdAt: string }
 
 export type StoreOpenResult =
   | { ok: true; store: SessionStore }
@@ -106,9 +112,12 @@ export class SessionStore {
       ? (credentials as unknown as { getSync: (id: string) => string | null }).getSync!(SESSION_DATA_KEY_ID)
       : null;
 
+    const databaseExists = (() => { try { return existsSync(dbPath) && statSync(dbPath).size > 0; } catch { return false; } })();
     let finalKeyB64: string;
     if (keyB64) {
       finalKeyB64 = keyB64;
+    } else if (databaseExists) {
+      return { ok: false, mode: 'recovery-locked', cause: 'session encryption key unavailable; refusing replacement key' };
     } else {
       const fresh = generateDataKey();
       finalKeyB64 = fresh.toString('base64');
@@ -117,6 +126,7 @@ export class SessionStore {
       }
     }
     const key = Buffer.from(finalKeyB64, 'base64');
+    if (key.length !== 32) return { ok: false, mode: 'recovery-locked', cause: 'session encryption key has invalid length' };
 
     const db = new Database(dbPath);
     db.pragma('journal_mode = WAL');
@@ -153,6 +163,14 @@ export class SessionStore {
         model_id TEXT NOT NULL,
         created_at TEXT NOT NULL
       );
+      CREATE TABLE IF NOT EXISTS context_extensions (
+        id TEXT PRIMARY KEY,
+        session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+        seq INTEGER NOT NULL,
+        envelope_enc TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        UNIQUE(session_id, seq)
+      );
     `);
     db.exec(JOURNAL_DDL);
 
@@ -184,7 +202,7 @@ export class SessionStore {
   }
 
   createSession(name: string, workspacePath: string): SessionRecord {
-    const id = randomUUID();
+    const id = newSessionId();
     const now = new Date().toISOString();
     this._db
       .prepare(
@@ -293,6 +311,37 @@ export class SessionStore {
       )
       .get(sessionId) as { i: number; o: number; c: number };
     return { input: row.i, output: row.o, cached: row.c };
+  }
+
+  appendContextExtension(envelope: ContextExtensionEnvelope): number {
+    const checked = validateExtension(envelope, envelope.sessionId);
+    if (!checked.ok) throw new Error(`invalid context extension: ${checked.cause}`);
+    const tx = this._db.transaction(() => {
+      const existing = this._db.prepare('SELECT seq, envelope_enc FROM context_extensions WHERE id = ?').get(envelope.id) as { seq: number; envelope_enc: string } | undefined;
+      if (existing) {
+        // Idempotent publication is only safe when the replay is byte-identical;
+        // an identifier collision must never replace committed evidence.
+        const existingJson = decryptField(dec(existing.envelope_enc), this.dataKey, `extension:${envelope.id}`);
+        if (existingJson !== JSON.stringify(envelope)) throw new Error('context extension id collision');
+        return existing.seq;
+      }
+      const row = this._db.prepare('SELECT COALESCE(MAX(seq), 0) AS m FROM context_extensions WHERE session_id = ?').get(envelope.sessionId) as { m: number };
+      const seq = row.m + 1;
+      this._db.prepare('INSERT INTO context_extensions (id, session_id, seq, envelope_enc, created_at) VALUES (?, ?, ?, ?, ?)').run(envelope.id, envelope.sessionId, seq, enc(encryptField(JSON.stringify(envelope), this.dataKey, `extension:${envelope.id}`)), envelope.provenance.at);
+      return seq;
+    });
+    return tx();
+  }
+  listContextExtensions(sessionId: string): ContextExtensionRecord[] {
+    const rows = this._db.prepare('SELECT * FROM context_extensions WHERE session_id = ? ORDER BY seq ASC').all(sessionId) as Array<Record<string, string | number>>;
+    return rows.map((row) => ({ id: String(row.id), sessionId: String(row.session_id), seq: Number(row.seq), envelope: JSON.parse(decryptField(dec(String(row.envelope_enc)), this.dataKey, `extension:${String(row.id)}`)) as ContextExtensionEnvelope, createdAt: String(row.created_at) }));
+  }
+  recoverContextGovernance(sessionId: string): ContextRecoveryState {
+    try {
+      return recoverContextExtensions(this.listContextExtensions(sessionId).map((record) => record.envelope), sessionId);
+    } catch {
+      return Object.freeze({ pins: [], manifests: [], usage: [], compactions: [], overflows: [], opaque: [], highWater: 0, status: 'recovery-locked' });
+    }
   }
 
   close(): void {

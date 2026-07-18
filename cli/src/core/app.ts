@@ -4,7 +4,7 @@
 // child_process directly.
 
 import { randomUUID } from 'node:crypto';
-import { AgentLoop, type ApprovalCallback } from './agent/loop.js';
+import type { ApprovalCallback } from './agent/loop.js';
 import { dispatchTyphoonTurn, durableEvent } from './agent/dispatch.js';
 import { validateProposal } from './agent/validation.js';
 import type { ValidationDeps } from './agent/validation.js';
@@ -53,7 +53,14 @@ import {
 import {
   contextUtilizationPercentOrUnavailable,
   effectiveContextCapacityOrUnavailable,
+  type ContextBuildResult,
 } from './context/types.js';
+import { DeterministicContextBuilder, contextCapacity } from './context/builder.js';
+import { createContextManifest, type ContextManifest } from './context/manifest.js';
+import { reconcileUsage, type UsageObservation } from './context/usage.js';
+import { compactContext } from './context/compaction.js';
+import { createExtension } from './context/extensions.js';
+import { createPin, removePin, resolvePins, type ContextPin } from './context/pins.js';
 import type { PermissionProfile, WorkMode } from './permissions/types.js';
 import {
   activationEstablishedPayload,
@@ -91,7 +98,7 @@ import { checkContainment } from './workspace/containment.js';
 import type { WorkspaceIdentity } from './workspace/types.js';
 import { createCredentialStore, type CredentialStore } from './platform/index.js';
 import { createDefaultProviderRegistry, ProviderRegistry } from './providers/registry.js';
-import type { NormalizedMessage } from './providers/types.js';
+import type { NormalizedMessage, ToolSchema } from './providers/types.js';
 import { HealthRegistry, type HealthSnapshot } from './providers/health.js';
 import { typhoonGeneration, typhoonHealthProbe } from './providers/typhoonHealth.js';
 import { createDefaultToolRegistry, type ToolRegistry } from './tools/registry.js';
@@ -105,9 +112,11 @@ import {
   type CommandOutput,
   type CoreCommand,
 } from './protocol/commandGrammar.js';
-import { asSessionId, asOperationId, newOperationId } from './protocol/ids.js';
+import { asSessionId, asOperationId, newOperationId, newSessionId, newPromptRoundId } from './protocol/ids.js';
 import type { OperationId } from './protocol/ids.js';
 import type { SessionRepository } from './sessions/repository.js';
+import type { SessionStore } from './sessions/store.js';
+import type { ContextRecoveryState } from './context/recovery.js';
 import { CheckpointRepository } from './checkpoints/checkpointRepository.js';
 import { ArtifactStore } from './checkpoints/artifactStore.js';
 import type { KeyValueStore, BlobStore } from './checkpoints/types.js';
@@ -330,6 +339,9 @@ export interface CoreAppOptions {
    * absent, the same transitions still happen in memory (state, projections)
    * but are not persisted — tests that need durability pass a repo. */
   repo?: SessionRepository;
+  sessionStore?: SessionStore;
+  /** Existing durable session identity; generated only for an unpersisted app. */
+  sessionId?: string;
   clock?: () => string;
 }
 
@@ -342,9 +354,15 @@ export class CoreApp {
 
   private history: NormalizedMessage[] = [];
   private estimatedContextTokens = 0;
-  private readonly loop: AgentLoop;
+  private readonly contextBuilder = new DeterministicContextBuilder();
+  private activeContext: ContextBuildResult | null = null;
+  private latestManifest: ContextManifest | null = null;
+  private readonly usageObservations: UsageObservation[] = [];
+  private readonly pins: ContextPin[] = [];
   private readonly repo?: SessionRepository;
+  private readonly sessionStore?: SessionStore;
   private readonly clock: () => string;
+  private readonly currentSessionId: ReturnType<typeof newSessionId>;
 
   /** Story 2.1: Runtime Activation owns the live Work Mode / Permission
    * Profile / Full Access / sensitive-transfer-override / composer-busy
@@ -391,17 +409,29 @@ export class CoreApp {
     this.tools = opts.tools ?? createDefaultToolRegistry();
     this.health = opts.health ?? new HealthRegistry();
     this.repo = opts.repo;
+    this.sessionStore = opts.sessionStore;
     this.clock = opts.clock ?? (() => new Date().toISOString());
+    // A CoreApp backed by a SessionStore must own a real persisted session
+    // identity. The synthetic identity remains only for legacy in-memory
+    // callers that have no durable store.
+    const persistedSession = this.sessionStore
+      ? this.sessionStore.listSessionsForWorkspace(this.workspaceRoot)[0]
+      : undefined;
+    this.currentSessionId = asSessionId(
+      opts.sessionId
+        ?? persistedSession?.id
+        ?? (this.sessionStore ? this.sessionStore.createSession('current', this.workspaceRoot).id : `sess-${this.providers.selectedId}`),
+    );
+    if (this.sessionStore) {
+      const recovered = this.sessionStore.recoverContextGovernance(this.currentSessionId);
+      this.pins.push(...recovered.pins);
+      this.usageObservations.push(...recovered.usage);
+      this.latestManifest = recovered.manifests[recovered.manifests.length - 1] ?? null;
+    }
     this._specialistHealth = new SpecialistHealthLifecycle(this.clock);
     this._specialistArtifactResolver = new SpecialistArtifactResolver({
       fsProbe: defaultFsProbe(),
       clock: this.clock,
-    });
-    this.loop = new AgentLoop({
-      providers: this.providers,
-      tools: this.tools,
-      credentials: this.credentials,
-      workspaceRoot: this.workspaceRoot,
     });
     // Register the Typhoon live probe and wire a generation on startup if a
     // key is present (FR-2, FR-4, AD-8). A live check is run lazily by the
@@ -447,7 +477,22 @@ export class CoreApp {
   }
 
   private sessionId(): string {
-    return `sess-${this.providers.selectedId}`;
+    return this.currentSessionId;
+  }
+
+  /** Persist a sanitized, checksummed context extension when a durable session
+   * is available. Unknown extension kinds remain opaque and non-authoritative
+   * during recovery; this helper never stores provider payloads or secrets. */
+  private persistContextExtension(kind: Parameters<typeof createExtension>[0]['kind'], payload: unknown): void {
+    if (!this.sessionStore) return;
+    this.sessionStore.appendContextExtension(createExtension({
+      kind,
+      sessionId: asSessionId(this.sessionId()),
+      owner: 'core-app',
+      payload,
+      source: 'core-app',
+      now: this.clock(),
+    }));
   }
 
   /** Live Typhoon health check (FR-2, FR-4, AD-8). Registers the current
@@ -1396,6 +1441,26 @@ export class CoreApp {
     };
   }
 
+  pinContextItem(itemId: string, transcriptIdentity = itemId, reason = 'developer pinned context'): ContextPin {
+    const pin = createPin({ sessionId: this.sessionId(), target: { itemId, transcriptIdentity }, reason, now: this.clock() });
+    this.pins.push(pin);
+    this.repo?.append(durableEvent({ kind: 'PinChanged', pinId: pin.id, operation: 'pin', itemId, sessionId: this.sessionId() }, asSessionId(this.sessionId()), { provenanceKind: 'deterministic', provenanceSource: 'context-pin', clock: this.clock }));
+    this.persistContextExtension('pin', pin);
+    return pin;
+  }
+
+  unpinContextItem(pinId: string): boolean {
+    const index = this.pins.findIndex((pin) => pin.id === pinId && pin.status === 'active');
+    if (index < 0) return false;
+    const removed = removePin(this.pins[index], this.clock());
+    this.pins[index] = removed;
+    this.repo?.append(durableEvent({ kind: 'PinChanged', pinId, operation: 'unpin', itemId: removed.target.itemId, sessionId: this.sessionId() }, asSessionId(this.sessionId()), { provenanceKind: 'deterministic', provenanceSource: 'context-pin', clock: this.clock }));
+    this.persistContextExtension('pin', removed);
+    return true;
+  }
+
+  listContextPins(): readonly ContextPin[] { return resolvePins(this.pins, this.sessionId()); }
+
   status(): CoreStatus {
     const caps = this.providers.selected.capabilities;
     const capacity = effectiveContextCapacityOrUnavailable(caps.contextLimit);
@@ -1456,15 +1521,30 @@ export class CoreApp {
     };
   }
 
+  contextRecovery(): ContextRecoveryState {
+    return this.sessionStore?.recoverContextGovernance(this.sessionId()) ?? Object.freeze({ pins: [], manifests: [], usage: [], compactions: [], overflows: [], opaque: [], highWater: 0, status: 'unavailable' });
+  }
+
+  /** Cumulative provider usage projection. Context utilization is intentionally
+   * not mixed into this ledger. */
+  usageProjection(): import('./protocol/projections.js').UsageProjection {
+    const totals = reconcileUsage(this.usageObservations);
+    return { inputTokens: totals.inputTokens, outputTokens: totals.outputTokens, cachedInputTokens: totals.cachedInputTokens, calls: totals.calls, measurement: totals.measurement, observations: totals.observations.map((o) => ({ operationId: o.operationId, modelId: o.modelId, source: o.source, observedAt: o.observedAt })) };
+  }
+
   /** Canonical ConversationProjection (AD-2). The UI calls this — it never
    * builds its own authoritative transcript. Derives transcript turns from
    * the in-memory history; durable journal replay (Epic 6) feeds this too. */
   query(): ConversationProjection {
-    const transcript: TranscriptTurnProjection[] = this.history.map((m, i) => ({
+    const durableTranscript = this.sessionStore?.getTranscript(this.sessionId());
+    const transcriptSource: readonly NormalizedMessage[] = durableTranscript && durableTranscript.length > 0
+      ? durableTranscript.map((entry) => ({ role: entry.role, content: entry.content }))
+      : this.history;
+    const transcript: TranscriptTurnProjection[] = transcriptSource.map((m, i) => ({
       promptRoundId: `round-${i}`,
       role: m.role,
       text: m.content,
-      timestamp: new Date().toISOString(),
+      timestamp: this.clock(),
       interrupted: false,
       evidenceComplete: 'complete' as const,
     }));
@@ -1480,10 +1560,14 @@ export class CoreApp {
       },
       transcript,
       context: {
-        estimatedTokens: this.estimatedContextTokens,
-        effectiveCapacity: capacity,
-        utilizationPercent: contextUtilizationPercentOrUnavailable(this.estimatedContextTokens, capacity),
-        pinnedTurnCount: 0,
+        estimatedTokens: this.activeContext?.estimatedTokens ?? this.estimatedContextTokens,
+        effectiveCapacity: this.activeContext?.capacity.effective ?? capacity,
+        utilizationPercent: this.activeContext?.utilization.percent ?? contextUtilizationPercentOrUnavailable(this.estimatedContextTokens, capacity),
+        pinnedTurnCount: this.activeContext?.items.filter((i) => i.inclusion === 'pinned').length ?? 0,
+        contributors: this.activeContext?.items.map((i) => ({ itemId: i.id, role: i.role, inclusion: i.inclusion, provenance: i.source.provenance, trust: i.source.trust, estimatedTokens: i.estimatedTokens, measuredBytes: i.measuredBytes, ...(i.omissionReason ? { omittedReason: i.omissionReason } : {}) })),
+        omissions: this.activeContext?.omissions.map((i) => ({ itemId: i.id, reason: i.omissionReason ?? 'not-selected' })),
+        manifestId: this.latestManifest?.id ?? null,
+        measurement: this.activeContext?.capacity.measurementQuality ?? 'unknown',
       },
     };
   }
@@ -2420,6 +2504,20 @@ export class CoreApp {
         return renderCommandOutput({ status: 'succeeded', body: JSON.stringify({ providerId: this.providers.selectedId, health: this.health.snapshot(this.providers.selectedId).state }, null, 2), nextStep: 'continue' });
       case 'activity':
         return renderCommandOutput({ status: 'succeeded', body: 'activity projection available via the journal replay surface', nextStep: 'continue' });
+      case 'context': {
+        const sub = args[0];
+        if (sub === 'pin' && args[1]) {
+          const pin = this.pinContextItem(args[1], args[1]);
+          return renderCommandOutput({ status: 'succeeded', body: JSON.stringify(pin, null, 2), nextStep: 'rerun /context to inspect' });
+        }
+        if (sub === 'unpin' && args[1]) {
+          const removed = this.unpinContextItem(args[1]);
+          return renderCommandOutput({ status: removed ? 'succeeded' : 'blocked', cause: removed ? undefined : 'pin not found', nextStep: removed ? 'rerun /context to inspect' : 'inspect active pins first' });
+        }
+        return renderCommandOutput({ status: 'succeeded', body: JSON.stringify({ ...this.query().context, pins: this.listContextPins() }, null, 2), nextStep: 'use /context pin <itemId> or /context unpin <pinId>' });
+      }
+      case 'usage':
+        return renderCommandOutput({ status: 'succeeded', body: JSON.stringify(this.usageProjection(), null, 2), nextStep: 'usage is cumulative and separate from active context' });
       case 'models':
         // AC #3: /models is Typhoon inspection-only; unresolved pins honestly labeled.
         return renderCommandOutput({ status: 'succeeded', body: `Typhoon inspection-only — model: ${this.providers.selected.capabilities.modelId}`, nextStep: 'continue' });
@@ -2692,26 +2790,70 @@ export class CoreApp {
     _approve: ApprovalCallback = async () => false,
     onToken?: (delta: string) => void,
   ): Promise<string> {
-    // Dispatch via the durable sanitized-chunk path (Story 1.9). The legacy
-    // AgentLoop is retained for the tool-call mediation path (Epic 3); the
-    // first-conversation flow uses dispatchTyphoonTurn directly so every chunk
-    // is journaled and interruption boundaries are recorded.
-    const sessionId = `sess-${this.providers.selectedId}`;
-    const messages: NormalizedMessage[] = [...this.history, { role: 'user', content: input }];
-    const clock = () => new Date().toISOString();
-    const result = await dispatchTyphoonTurn({
-      sessionId,
-      promptText: input,
-      providers: this.providers,
-      credentials: this.credentials,
-      messages,
-      clock,
-      onToken,
-    });
-    this.history = [...this.history, { role: 'user', content: input }, { role: 'assistant', content: result.text }];
-    this.estimatedContextTokens = Math.ceil(
-      this.history.reduce((n, m) => n + m.content.length, 0) / 4,
-    );
+    const sessionId = this.sessionId();
+    const messages: NormalizedMessage[] = [...this.history];
+    const adapter = this.providers.selected;
+    const cap = contextCapacity(adapter.capabilities.contextLimit, 2048);
+    let context = this.contextBuilder.build({ history: messages, newInput: input, sessionId, now: this.clock(), capacity: cap, pins: resolvePins(this.pins, sessionId) });
+    this.activeContext = context;
+    if (cap.effective === 'percentage unavailable') return 'Context capacity unavailable: provider verification is required before dispatch.';
+    if (context.utilization.percent !== 'percentage unavailable' && context.utilization.percent > 70) { const compacted = compactContext(context, this.clock()); if (!compacted.ok) { this.persistContextExtension('overflow', compacted.overflow); this.repo?.append(durableEvent({ kind: 'ContextOverflowBlocked', category: compacted.overflow.category, protectedTokens: compacted.overflow.protectedTokens, availableTokens: compacted.overflow.availableTokens, remedies: compacted.overflow.remedies }, asSessionId(sessionId), { provenanceKind: 'deterministic', provenanceSource: 'context-overflow', clock: this.clock })); return `Context blocked: ${compacted.overflow.category}; ${compacted.overflow.remedies.join('; ')}`; } context = compacted.context; this.activeContext = context; const compactionRecord = { targetPercent: compacted.targetPercent, sourceIds: compacted.compactedItemIds, policyVersion: 'epic5-deterministic-v1', measuredTokens: context.estimatedTokens }; this.persistContextExtension('compaction', compactionRecord); this.repo?.append(durableEvent({ kind: 'ContextCompacted', ...compactionRecord }, asSessionId(sessionId), { provenanceKind: 'deterministic', provenanceSource: 'context-compaction', clock: this.clock })); }
+    if (context.utilization.percent !== 'percentage unavailable' && context.utilization.percent > 100) return 'Context blocked: protected content exceeds verified capacity.';
+    if (!adapter.finalize) return 'Context blocked: provider does not expose exact request finalization.';
+    const operationId = newOperationId();
+    const promptRoundId = newPromptRoundId() as unknown as string;
+    const toolSchemas: ToolSchema[] = this.tools.listForMode(this.activation.snapshot().mode).map((tool) => ({
+      name: tool.name,
+      description: tool.description,
+      parameters: { type: 'object', properties: {}, additionalProperties: true },
+    }));
+    const provisional = createContextManifest({ sessionId, operationId, promptRoundId, providerId: adapter.capabilities.provider, modelId: adapter.capabilities.modelId, configurationGeneration: adapter.capabilities.modelId, requestBytes: new Uint8Array(), context, now: this.clock() });
+    const finalized = adapter.finalize({ messages: context.messages, tools: toolSchemas, maxOutputTokens: 2048, manifest: provisional });
+    if (finalized.bytes.byteLength === 0) return 'Context blocked: finalized request is empty.';
+    const manifest = createContextManifest({ sessionId, operationId, promptRoundId, providerId: adapter.capabilities.provider, modelId: adapter.capabilities.modelId, configurationGeneration: adapter.capabilities.modelId, requestBytes: finalized.bytes, context, now: this.clock() });
+    this.latestManifest = manifest;
+    this.persistContextExtension('manifest', manifest);
+    this.repo?.append(durableEvent({ kind: 'ContextManifestFinalized', manifestId: manifest.id, requestBytesDigest: manifest.requestBytesDigest, requestBytesLength: manifest.requestBytesLength, contextDigest: manifest.contextDigest, operationId }, asSessionId(sessionId), { operationId, provenanceKind: 'deterministic', provenanceSource: 'context-manifest', clock: this.clock }));
+    for (const decision of context.decisions ?? []) this.repo?.append(durableEvent({ kind: 'ContextDecisionRecorded', itemId: decision.itemId, included: decision.included, mode: decision.mode, ...(decision.reason ? { reason: decision.reason } : {}), manifestId: manifest.id }, asSessionId(sessionId), { operationId, provenanceKind: 'deterministic', provenanceSource: 'context-builder', clock: this.clock }));
+    const result = await dispatchTyphoonTurn({ sessionId, promptText: input, providers: this.providers, credentials: this.credentials, messages: context.messages, repo: this.repo, clock: this.clock, onToken, finalized: { ...finalized, manifest } });
+    if (result.text.startsWith('Provider "') && result.text.includes('unavailable')) return result.text;
+    if (result.events.some((e) => e.payload.kind === 'OperationSucceeded')) {
+      // Publish transcript entries only after the provider operation has a
+      // durable success. A blocked/failed gate therefore cannot create a
+      // duplicate user turn when the caller retries.
+      if (this.sessionStore) {
+        this.sessionStore.appendTranscript(sessionId, 'user', input);
+        this.sessionStore.appendTranscript(sessionId, 'assistant', result.text);
+      }
+      this.history = [...this.history, { role: 'user', content: input }, { role: 'assistant', content: result.text }];
+      const usage = result.providerUsage;
+      if (usage) {
+        const observation = {
+          id: `${operationId}:usage`,
+          sessionId,
+          operationId,
+          modelId: adapter.capabilities.modelId,
+          inputTokens: usage.inputTokens,
+          outputTokens: usage.outputTokens,
+          cachedInputTokens: usage.cachedInputTokens,
+          calls: 1,
+          source: 'provider-reported' as const,
+          observedAt: this.clock(),
+          requestDigest: manifest.requestBytesDigest,
+        };
+        this.usageObservations.push(observation);
+        this.sessionStore?.recordTokens({
+          sessionId,
+          inputTokens: usage.inputTokens,
+          outputTokens: usage.outputTokens,
+          cachedTokens: usage.cachedInputTokens,
+          modelId: adapter.capabilities.modelId,
+        });
+        this.persistContextExtension('usage', observation);
+        this.repo?.append(durableEvent({ kind: 'UsageObserved', operationId, modelId: adapter.capabilities.modelId, inputTokens: usage.inputTokens, outputTokens: usage.outputTokens, cachedInputTokens: usage.cachedInputTokens, source: 'provider-reported', requestDigest: manifest.requestBytesDigest }, asSessionId(sessionId), { operationId, provenanceKind: 'deterministic', provenanceSource: 'provider-usage', clock: this.clock }));
+      }
+    }
+    this.estimatedContextTokens = context.estimatedTokens;
     return result.text;
   }
 
@@ -3334,21 +3476,13 @@ export class CoreApp {
   /** Legacy Agent Loop entry retained for Epic 3 tool-call mediation. */
   async runAgentTurn(
     input: string,
-    approve: ApprovalCallback = async () => false,
+    _approve: ApprovalCallback = async () => false,
     onToken?: (delta: string) => void,
   ): Promise<string> {
-    const a = this.activation.snapshot();
-    const result = await this.loop.runTurn(
-      input,
-      { mode: a.mode, profile: a.profile, history: this.history },
-      approve,
-      onToken,
-    );
-    this.history = [...result.history];
-    this.estimatedContextTokens = Math.ceil(
-      this.history.reduce((n, m) => n + m.content.length, 0) / 4,
-    );
-    return result.text;
+    // Every reasoning-provider entry point shares the mandatory context,
+    // capacity, manifest, authority, and exact-byte pipeline. The legacy name
+    // remains for callers that also mediate tool proposals elsewhere.
+    return this.runTurn(input, _approve, onToken);
   }
 }
 

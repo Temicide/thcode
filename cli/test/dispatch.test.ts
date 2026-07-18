@@ -8,6 +8,8 @@ import { ProviderRegistry } from '../src/core/providers/registry.js';
 import type { ProviderAdapter, ProviderAvailability, ProviderCapabilities, ProviderRequest, ProviderResult, RetryableErrorMeta, TokenSink } from '../src/core/providers/types.js';
 import { SessionStore } from '../src/core/sessions/store.js';
 import { SessionRepository } from '../src/core/sessions/repository.js';
+import { DeterministicContextBuilder, contextCapacity } from '../src/core/context/builder.js';
+import { createContextManifest, digestBytes } from '../src/core/context/manifest.js';
 
 const tmp = mkdtempSync(path.join(os.tmpdir(), 'thcode-dispatch-'));
 afterAll(() => rmSync(tmp, { recursive: true, force: true }));
@@ -48,6 +50,16 @@ class FakeTyphoon implements ProviderAdapter {
     if (status === 429) return { retryable: true, kind: 'rate-limit' };
     return { retryable: false, kind: 'unknown' };
   }
+  finalize(input: import('../src/core/providers/types.js').ProviderFinalizationInput): import('../src/core/providers/types.js').FinalizedProviderRequest {
+    const bytes = new TextEncoder().encode(JSON.stringify({
+      model: this.capabilities.modelId,
+      stream: true,
+      max_tokens: input.maxOutputTokens ?? 2048,
+      messages: input.messages,
+      ...(input.tools && input.tools.length > 0 ? { tools: input.tools } : {}),
+    }));
+    return { bytes, digest: digestBytes(bytes), manifest: input.manifest };
+  }
   async complete(request: ProviderRequest, apiKey: string, onToken?: TokenSink): Promise<ProviderResult> {
     if (this.shouldThrow?.(request.signal)) {
       throw Object.assign(new Error('network failed'), { status: 500 });
@@ -64,6 +76,22 @@ function makeRegistry(adapter: ProviderAdapter): ProviderRegistry {
   const reg = new ProviderRegistry('typhoon');
   reg.register(adapter);
   return reg;
+}
+
+async function dispatchForTest(args: Parameters<typeof dispatchTyphoonTurn>[0]): ReturnType<typeof dispatchTyphoonTurn> {
+  const adapter = args.providers.selected;
+  if (!adapter.finalize) throw new Error('test adapter must finalize');
+  const capacity = contextCapacity(adapter.capabilities.contextLimit, 2048);
+  const history = args.messages.slice(0, -1);
+  const newInput = args.messages.at(-1)?.content ?? args.promptText;
+  const builtContext = new DeterministicContextBuilder().build({ history, newInput, sessionId: args.sessionId, capacity, now: fixedClock() });
+  const context = Object.freeze({ ...builtContext, messages: args.messages });
+  const operationId = 'op-test-finalize';
+  const promptRoundId = 'round-test-finalize';
+  const provisional = createContextManifest({ sessionId: args.sessionId, operationId, promptRoundId, providerId: adapter.capabilities.provider, modelId: adapter.capabilities.modelId, configurationGeneration: adapter.capabilities.modelId, requestBytes: new Uint8Array(), context, now: fixedClock() });
+  const first = adapter.finalize({ messages: args.messages, tools: args.tools as never, maxOutputTokens: 2048, manifest: provisional });
+  const manifest = createContextManifest({ sessionId: args.sessionId, operationId, promptRoundId, providerId: adapter.capabilities.provider, modelId: adapter.capabilities.modelId, configurationGeneration: adapter.capabilities.modelId, requestBytes: first.bytes, context, now: fixedClock() });
+  return dispatchTyphoonTurn({ ...args, finalized: { ...first, manifest } });
 }
 
 function makeRepo(file: string): { repo: SessionRepository; store: SessionStore } {
@@ -99,7 +127,7 @@ describe('dispatchTyphoonTurn — durable sanitized chunks (AC #1, #2, #3)', () 
     const reg = makeRegistry(new FakeTyphoon(['สวัสดี', ' world'], { kind: 'final', text: 'สวัสดี world' }));
     const { repo, store } = makeRepo('d1.db');
     const tokens: string[] = [];
-    const r = await dispatchTyphoonTurn({
+    const r = await dispatchForTest({
       sessionId: 'sess-1', promptText: 'say hello', providers: reg, credentials: creds,
       messages: [{ role: 'user', content: 'say hello' }], repo, clock: fixedClock,
       onToken: (d) => tokens.push(d),
@@ -123,7 +151,7 @@ describe('dispatchTyphoonTurn — durable sanitized chunks (AC #1, #2, #3)', () 
     await creds.set('typhoon', 'sk-test');
     const reg = makeRegistry(new FakeTyphoon(['Authorization: Bearer secret123abc456'], { kind: 'final', text: 'ok' }));
     const { repo, store } = makeRepo('d2.db');
-    const r = await dispatchTyphoonTurn({
+    const r = await dispatchForTest({
       sessionId: 'sess-2', promptText: 'show me', providers: reg, credentials: creds,
       messages: [{ role: 'user', content: 'show me' }], repo, clock: fixedClock,
     });
@@ -145,7 +173,7 @@ describe('dispatchTyphoonTurn — interruption boundary (AC #4, AD-3)', () => {
     const ac = new AbortController();
     const tokens: string[] = [];
     // Abort after the first chunk is recorded.
-    const r = await dispatchTyphoonTurn({
+    const r = await dispatchForTest({
       sessionId: 'sess-3', promptText: 'test', providers: reg, credentials: creds,
       messages: [{ role: 'user', content: 'test' }], repo, clock: fixedClock,
       signal: ac.signal,
@@ -167,7 +195,7 @@ describe('dispatchTyphoonTurn — PR-1 invalid proposal rejection (AC #6, AD-14)
     await creds.set('typhoon', 'sk-test');
     const reg = makeRegistry(new FakeTyphoon([], { kind: 'tool_call', toolName: '', input: {} }));
     const { repo, store } = makeRepo('d4.db');
-    const r = await dispatchTyphoonTurn({
+    const r = await dispatchForTest({
       sessionId: 'sess-4', promptText: 'do something', providers: reg, credentials: creds,
       messages: [{ role: 'user', content: 'do something' }], repo, clock: fixedClock,
     });
@@ -187,7 +215,7 @@ describe('dispatchTyphoonTurn — NormalizedIntent Evidence is durably journaled
     await creds.set('typhoon', 'sk-test');
     const reg = makeRegistry(new FakeTyphoon(['ok'], { kind: 'final', text: 'ok' }));
     const { repo, store } = makeRepo('d5.db');
-    const r = await dispatchTyphoonTurn({
+    const r = await dispatchForTest({
       sessionId: 'sess-7', promptText: 'create @main.cpp and run it', providers: reg, credentials: creds,
       messages: [{ role: 'user', content: 'create @main.cpp and run it' }], repo, clock: fixedClock,
     });
@@ -213,7 +241,7 @@ describe('dispatchTyphoonTurn — NormalizedIntent Evidence is durably journaled
     await creds.set('typhoon', 'sk-test');
     const reg = makeRegistry(new FakeTyphoon([], { kind: 'final', text: 'never' }));
     const { repo, store } = makeRepo('d6.db');
-    const r = await dispatchTyphoonTurn({
+    const r = await dispatchForTest({
       sessionId: 'sess-8', promptText: '???', providers: reg, credentials: creds,
       messages: [{ role: 'user', content: '???' }], repo, clock: fixedClock,
     });
@@ -230,7 +258,7 @@ describe('dispatchTyphoonTurn — NormalizedIntent Evidence is durably journaled
     const reg = makeRegistry(new FakeTyphoon(['ok'], { kind: 'final', text: 'ok' }));
     const { repo, store } = makeRepo('d7.db');
     const secretPrompt = 'create a file with api_key: superlongsecretvalue12345 and run it';
-    const r = await dispatchTyphoonTurn({
+    const r = await dispatchForTest({
       sessionId: 'sess-9', promptText: secretPrompt, providers: reg, credentials: creds,
       messages: [{ role: 'user', content: secretPrompt }], repo, clock: fixedClock,
     });
@@ -249,7 +277,7 @@ describe('dispatchTyphoonTurn — NormalizedIntent Evidence is durably journaled
     // Empty text triggers 'material' ambiguity via detectAmbiguity's trimmed-length check
     // (not an extraction failure), so assert the extraction-ok path's invariant instead:
     // every EvidenceRecorded event that IS journaled always carries a real promptHash.
-    const r = await dispatchTyphoonTurn({
+    const r = await dispatchForTest({
       sessionId: 'sess-10', promptText: 'list @src', providers: reg, credentials: creds,
       messages: [{ role: 'user', content: 'list @src' }], repo, clock: fixedClock,
     });
@@ -264,7 +292,7 @@ describe('dispatchTyphoonTurn — ambiguity + unavailability (AC #5)', () => {
     const creds = new InMemoryCredentialStore();
     await creds.set('typhoon', 'sk-test');
     const reg = makeRegistry(new FakeTyphoon([], { kind: 'final', text: 'never' }));
-    const r = await dispatchTyphoonTurn({
+    const r = await dispatchForTest({
       sessionId: 'sess-5', promptText: '???', providers: reg, credentials: creds,
       messages: [{ role: 'user', content: '???' }], clock: fixedClock,
     });
@@ -276,7 +304,7 @@ describe('dispatchTyphoonTurn — ambiguity + unavailability (AC #5)', () => {
   it('blocks with a typed cause when no key is present', async () => {
     const creds = new InMemoryCredentialStore();
     const reg = makeRegistry(new FakeTyphoon([], { kind: 'final', text: 'never' }));
-    const r = await dispatchTyphoonTurn({
+    const r = await dispatchForTest({
       sessionId: 'sess-6', promptText: 'compile @main.cpp', providers: reg, credentials: creds,
       messages: [{ role: 'user', content: 'compile @main.cpp' }], clock: fixedClock,
     });

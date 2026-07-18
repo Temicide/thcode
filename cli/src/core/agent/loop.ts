@@ -1,6 +1,10 @@
 import type { CredentialStore } from '../platform/credentialStore.js';
 import type { ProviderRegistry } from '../providers/registry.js';
 import type { NormalizedMessage, ProviderResult, ToolSchema } from '../providers/types.js';
+import { DeterministicContextBuilder, contextCapacity } from '../context/builder.js';
+import { compactContext } from '../context/compaction.js';
+import { createContextManifest } from '../context/manifest.js';
+import { newOperationId, newPromptRoundId } from '../protocol/ids.js';
 import { evaluatePermission } from '../permissions/policy.js';
 import type { PermissionProfile, WorkMode } from '../permissions/types.js';
 import { PlanModeToolRefusedError, type ToolRegistry } from '../tools/registry.js';
@@ -22,6 +26,7 @@ export interface TurnState {
   readonly mode: WorkMode;
   readonly profile: PermissionProfile;
   readonly history: readonly NormalizedMessage[];
+  readonly sessionId?: string;
 }
 
 export type TurnEvent =
@@ -63,6 +68,8 @@ export class AgentLoop {
   ): Promise<TurnResult> {
     const events: TurnEvent[] = [];
     const adapter = this.deps.providers.selected;
+    const contextBuilder = new DeterministicContextBuilder();
+    const sessionId = state.sessionId ?? 'agent-loop-session';
     const providerId = adapter.capabilities.provider;
 
     const apiKey = await this.deps.credentials.get(providerId);
@@ -77,18 +84,50 @@ export class AgentLoop {
       };
     }
 
-    let history: NormalizedMessage[] = [...state.history];
+    // `transcript` is immutable local conversation history. The bounded
+    // request projection is rebuilt per iteration and must never replace it.
+    let transcript: NormalizedMessage[] = [...state.history];
     let pendingInput = input;
 
     for (let i = 0; i < MAX_TOOL_ITERATIONS; i++) {
-      // ponytail: verbatim passthrough context. When Automatic Compaction lands
-      // (ADR 0014), inject a ContextBuilder here instead of appending verbatim.
-      history = [...history, { role: 'user', content: pendingInput }];
+      const tools = this.toolSchemas(state.mode);
+      const capacity = contextCapacity(adapter.capabilities.contextLimit, 2048);
+      const built = contextBuilder.build({ history: transcript, newInput: pendingInput, sessionId, capacity });
+      if (!adapter.finalize) {
+        const text = 'Context blocked: provider does not expose exact request finalization.';
+        events.push({ kind: 'text', text });
+        return { text, history: transcript, events };
+      }
+      if (capacity.effective === 'percentage unavailable') {
+        const text = 'Context capacity unavailable: provider verification is required before dispatch.';
+        events.push({ kind: 'text', text });
+        return { text, history: transcript, events };
+      }
+      let context = built;
+      if (context.utilization.percent !== 'percentage unavailable' && context.utilization.percent > 70) {
+        const compacted = compactContext(context);
+        if (!compacted.ok) {
+          const text = `Context blocked: ${compacted.overflow.category}; ${compacted.overflow.remedies.join('; ')}`;
+          events.push({ kind: 'text', text });
+          return { text, history: transcript, events };
+        }
+        context = compacted.context;
+      }
+      const requestMessages = [...context.messages];
+      let finalized: import('../providers/types.js').FinalizedProviderRequest;
+      {
+        const operationId = newOperationId();
+        const promptRoundId = newPromptRoundId();
+        const provisional = createContextManifest({ sessionId, operationId, promptRoundId, providerId: adapter.capabilities.provider, modelId: adapter.capabilities.modelId, configurationGeneration: adapter.capabilities.modelId, requestBytes: new Uint8Array(), context });
+        const first = adapter.finalize({ messages: context.messages, tools, maxOutputTokens: 2048, manifest: provisional });
+        const manifest = createContextManifest({ sessionId, operationId, promptRoundId, providerId: adapter.capabilities.provider, modelId: adapter.capabilities.modelId, configurationGeneration: adapter.capabilities.modelId, requestBytes: first.bytes, context });
+        finalized = { ...first, manifest };
+      }
 
       let result: ProviderResult;
       try {
         result = await adapter.complete(
-          { messages: history, tools: this.toolSchemas(state.mode) },
+          { messages: requestMessages, tools, finalized },
           apiKey,
           onToken,
         );
@@ -96,14 +135,14 @@ export class AgentLoop {
         const meta = adapter.classifyError(err);
         const text = `Provider "${providerId}" error (${meta.kind}${meta.retryable ? ', retryable' : ''}): ${(err as Error).message}`;
         events.push({ kind: 'text', text });
-        return { text, history: [...history, { role: 'assistant', content: text }], events };
+        return { text, history: [...transcript, { role: 'user', content: input }, { role: 'assistant', content: text }], events };
       }
 
       if (result.kind === 'final') {
         events.push({ kind: 'text', text: result.text });
         return {
           text: result.text,
-          history: [...history, { role: 'assistant', content: result.text }],
+          history: [...transcript, { role: 'user', content: input }, { role: 'assistant', content: result.text }],
           events,
         };
       }
@@ -121,7 +160,7 @@ export class AgentLoop {
             : `Tool "${toolName}" is not available.`;
         events.push({ kind: 'tool-result', tool: toolName, ok: false, output: refusal });
         pendingInput = `[tool refused] ${refusal}`;
-        history = [...history, { role: 'tool', content: refusal }];
+        transcript = [...transcript, { role: 'tool', content: refusal }];
         continue;
       }
 
@@ -134,7 +173,7 @@ export class AgentLoop {
         const denial = `Tool "${toolName}" denied by policy (${decision.reason}).`;
         events.push({ kind: 'tool-result', tool: toolName, ok: false, output: denial });
         pendingInput = `[tool denied] ${denial}`;
-        history = [...history, { role: 'tool', content: denial }];
+        transcript = [...transcript, { role: 'tool', content: denial }];
         continue;
       }
 
@@ -145,7 +184,7 @@ export class AgentLoop {
           const rejection = `Tool "${toolName}" was not approved by the developer.`;
           events.push({ kind: 'tool-result', tool: toolName, ok: false, output: rejection });
           pendingInput = `[tool rejected] ${rejection}`;
-          history = [...history, { role: 'tool', content: rejection }];
+          transcript = [...transcript, { role: 'tool', content: rejection }];
           continue;
         }
       }
@@ -166,11 +205,11 @@ export class AgentLoop {
       }
       events.push({ kind: 'tool-result', tool: toolName, ok, output });
       pendingInput = `[tool result: ${toolName}] ${output}`;
-      history = [...history, { role: 'tool', content: output }];
+      transcript = [...transcript, { role: 'tool', content: output }];
     }
 
     const text = `Stopped after ${MAX_TOOL_ITERATIONS} tool iterations without a final answer.`;
     events.push({ kind: 'text', text });
-    return { text, history: [...history, { role: 'assistant', content: text }], events };
+    return { text, history: [...transcript, { role: 'user', content: input }, { role: 'assistant', content: text }], events };
   }
 }

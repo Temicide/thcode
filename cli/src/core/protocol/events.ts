@@ -97,7 +97,12 @@ export interface EvidenceRecordedPayload {
   readonly promptHash: string;
   readonly intent: NormalizedIntentEvidence;
 }
-export interface ContextCompactedPayload { readonly kind: 'ContextCompacted'; readonly targetPercent: number }
+export interface ContextCompactedPayload { readonly kind: 'ContextCompacted'; readonly targetPercent: number; readonly sourceIds?: readonly string[]; readonly policyVersion?: string; readonly manifestId?: string | null; readonly measuredTokens?: number }
+export interface PinChangedPayload { readonly kind: 'PinChanged'; readonly pinId: string; readonly operation: 'pin' | 'unpin'; readonly itemId: string; readonly sessionId: string }
+export interface ContextDecisionRecordedPayload { readonly kind: 'ContextDecisionRecorded'; readonly itemId: string; readonly included: boolean; readonly mode: string; readonly reason?: string; readonly manifestId?: string | null }
+export interface ContextManifestFinalizedPayload { readonly kind: 'ContextManifestFinalized'; readonly manifestId: string; readonly requestBytesDigest: string; readonly requestBytesLength: number; readonly contextDigest: string; readonly operationId: string }
+export interface ContextOverflowBlockedPayload { readonly kind: 'ContextOverflowBlocked'; readonly category: string; readonly protectedTokens: number; readonly availableTokens: number | 'percentage unavailable'; readonly remedies: readonly string[] }
+export interface UsageObservedPayload { readonly kind: 'UsageObserved'; readonly operationId: string; readonly modelId: string; readonly inputTokens: number; readonly outputTokens: number; readonly cachedInputTokens: number; readonly source: string; readonly requestDigest?: string }
 
 // --- Epic 2: Runtime Activation, PEP, and Boundary events (AD-12, AD-13,
 // AD-17, AD-18, AD-22, Stories 2.1-2.3). Literal mode/profile unions are
@@ -252,6 +257,11 @@ export type DurableEventPayload =
   | CapabilityChangedPayload
   | EvidenceRecordedPayload
   | ContextCompactedPayload
+  | PinChangedPayload
+  | ContextDecisionRecordedPayload
+  | ContextManifestFinalizedPayload
+  | ContextOverflowBlockedPayload
+  | UsageObservedPayload
   | RuntimeActivationEstablishedPayload
   | AuthorityChangedPayload
   | PolicyDecisionRecordedPayload
@@ -266,7 +276,7 @@ export const DURABLE_EVENT_KINDS = [
   'PromptSubmitted', 'ChatInterrupted', 'RemoteOutputObserved', 'EffectDispatchCommitted',
   'OperationSucceeded', 'OperationFailed', 'OperationBlocked', 'OperationCancelled',
   'OperationUnknownOutcome', 'HealthChanged', 'CapabilityChanged', 'EvidenceRecorded',
-  'ContextCompacted', 'RuntimeActivationEstablished', 'AuthorityChanged',
+  'ContextCompacted', 'PinChanged', 'ContextDecisionRecorded', 'ContextManifestFinalized', 'ContextOverflowBlocked', 'UsageObserved', 'RuntimeActivationEstablished', 'AuthorityChanged',
   'PolicyDecisionRecorded', 'BoundaryExpansionGranted', 'BoundaryExpansionRevoked',
   'ApprovalGranted', 'AuthorizationConsumed', 'AuthorizationRevoked',
   'AuthorityEvidenceRecorded',
@@ -299,6 +309,11 @@ export const _DURABLE_EXHAUSTIVE: Record<DurableEventPayload['kind'], true> = {
   CapabilityChanged: true,
   EvidenceRecorded: true,
   ContextCompacted: true,
+  PinChanged: true,
+  ContextDecisionRecorded: true,
+  ContextManifestFinalized: true,
+  ContextOverflowBlocked: true,
+  UsageObserved: true,
   RuntimeActivationEstablished: true,
   AuthorityChanged: true,
   PolicyDecisionRecorded: true,

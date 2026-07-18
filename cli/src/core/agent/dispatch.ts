@@ -21,7 +21,8 @@ import {
 import { protocolVersion } from '../protocol/version.js';
 import type { DurableEvent } from '../protocol/events.js';
 import type { SessionRepository } from '../sessions/repository.js';
-import type { ProviderResult, TokenSink } from '../providers/types.js';
+import type { FinalizedProviderRequest, ProviderResult, ProviderUsage, TokenSink } from '../providers/types.js';
+import { canonicalJson, digestBytes } from '../context/manifest.js';
 
 /** PR-1: invalid structured proposal is rejected after one validation pass
  * (AD-14). No repair, retry, reinterpretation, substitution, or relaxation. */
@@ -118,6 +119,7 @@ export interface DispatchResult {
   readonly proposalRejected: boolean;
   readonly rejectionCause?: string;
   readonly events: readonly DurableEvent[];
+  readonly providerUsage?: ProviderUsage;
 }
 
 /**
@@ -139,6 +141,7 @@ export async function dispatchTyphoonTurn(args: {
   readonly clock: () => string;
   readonly onToken?: TokenSink;
   readonly toolSchemas?: readonly { name: string; description: string; parameters: Record<string, unknown> }[];
+  readonly finalized?: FinalizedProviderRequest;
 }): Promise<DispatchResult> {
   const sessionId = asSessionId(args.sessionId);
   const promptRoundId = newPromptRoundId();
@@ -148,6 +151,30 @@ export async function dispatchTyphoonTurn(args: {
     events.push(e);
     args.repo?.append(e);
   };
+
+  // Finalization is a mandatory dispatch gate. A direct caller cannot use this
+  // function to bypass context governance or send bytes not bound to a
+  // manifest. Reject before any transcript/evidence publication so retries do
+  // not create duplicate durable user records.
+  if (!args.providers.selected.finalize || !args.finalized || args.finalized.bytes.byteLength === 0
+    || args.finalized.digest !== digestBytes(args.finalized.bytes)
+    || args.finalized.manifest.requestBytesLength !== args.finalized.bytes.byteLength
+    || args.finalized.manifest.requestBytesDigest !== args.finalized.digest
+    || args.finalized.manifest.sessionId !== sessionId
+    || args.finalized.manifest.providerId !== args.providers.selected.capabilities.provider
+    || args.finalized.manifest.modelId !== args.providers.selected.capabilities.modelId
+    || args.finalized.manifest.contextDigest !== digestBytes(new TextEncoder().encode(canonicalJson(args.messages)))) {
+    return {
+      text: 'Context blocked: finalized request is missing, empty, or not bound to the current session/provider.',
+      promptRoundId,
+      intent: null,
+      intentExtraction: { ok: false, cause: 'blocked', promptHash: '', message: 'finalized request is not authorized' },
+      highWaterMark: null,
+      interrupted: false,
+      proposalRejected: false,
+      events,
+    };
+  }
 
   // 1. Intent extraction (no byte change; AD-7). Record the prompt as durable
   //    PromptSubmitted with the *original* text — the Evidence record carries
@@ -262,7 +289,7 @@ export async function dispatchTyphoonTurn(args: {
   let result: ProviderResult;
   try {
     result = await adapter.complete(
-      { messages: args.messages, tools: args.toolSchemas, signal: args.signal },
+      { messages: args.messages, tools: args.toolSchemas, signal: args.signal, finalized: args.finalized },
       apiKey,
       recordChunk,
     );
@@ -345,5 +372,6 @@ export async function dispatchTyphoonTurn(args: {
     interrupted: false,
     proposalRejected: false,
     events,
+    providerUsage: result.usage,
   };
 }

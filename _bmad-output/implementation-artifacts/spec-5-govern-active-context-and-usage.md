@@ -2,8 +2,8 @@
 title: 'Govern Active Context and Usage'
 type: 'feature'
 created: '2026-07-18'
-status: 'ready'
-baseline_revision: '396005120abfe5168706a221e8d23502289aebe9'
+status: 'blocked'
+baseline_revision: '1460aef490c241f1174273712bd1138993d1572e'
 review_loop_iteration: 4
 followup_review_recommended: false
 context:
@@ -209,3 +209,19 @@ No implementation, commit, push, or runtime verification was performed by this s
 **Verification baseline:** `cd cli && npm run build` passed; `cd cli && npm test` passed (68 files, 1,809 tests); `git diff --check` passed. These legacy-focused results are a baseline only and do not satisfy the Epic 5 acceptance criteria.
 
 **No commit or push was performed.**
+
+## Auto Run Result
+
+**Status:** blocked
+
+**Blocking condition:** The Dev Auto implementation step mandates a synchronous implementation subagent. The invocation explicitly prohibits subagents, so the required workflow cannot proceed.
+
+**No implementation, verification, commit, or push was performed.**
+
+## Auto Run Result
+
+**Status:** blocked
+
+**Blocking condition:** The requested Dev Auto workflow requires a synchronous implementation subagent. The final instruction requires self-only implementation, which is incompatible with that mandatory workflow step.
+
+**No further implementation, review, QA, verification, commit, or push was performed in this run.**

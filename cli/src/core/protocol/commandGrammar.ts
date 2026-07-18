@@ -34,7 +34,9 @@ export type CoreCommand =
   | 'check'
   | 'help'
   | 'rollback'
-  | 'recover';
+  | 'recover'
+  | 'context'
+  | 'usage';
 
 export interface CommandSpec {
   readonly command: CoreCommand;
@@ -60,6 +62,8 @@ export const COMMAND_GRAMMAR: readonly CommandSpec[] = Object.freeze([
   { command: 'help', aliases: ['?', 'h'], description: 'list the frozen command grammar', mayRequireApproval: false },
   { command: 'rollback', aliases: ['rb'], description: 'discover and preview eligible rollback checkpoints (list/inspect)', mayRequireApproval: false },
   { command: 'recover', aliases: ['rc'], description: 'recover interrupted checkpoint and mutation operations (inspect/reconcile/export/exit)', mayRequireApproval: false },
+  { command: 'context', aliases: ['ctx'], description: 'inspect bounded Active Model Context', mayRequireApproval: false },
+  { command: 'usage', aliases: [], description: 'inspect cumulative provider usage', mayRequireApproval: false },
 ]);
 
 const SHELL_METACHARACTER_RE = /[$`*?;|<>&]|\\\n|\$\(|\bsh\b\s+-c/i;

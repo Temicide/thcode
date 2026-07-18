@@ -60,12 +60,33 @@ export interface ProviderRequest {
   readonly tools?: readonly ToolSchema[];
   readonly maxOutputTokens?: number;
   readonly signal?: AbortSignal;
+  /** Exact bytes finalized by the adapter; complete() must send these bytes. */
+  readonly finalized?: FinalizedProviderRequest;
+}
+
+export interface ProviderUsage {
+  readonly inputTokens: number;
+  readonly outputTokens: number;
+  readonly cachedInputTokens: number;
+}
+
+export interface FinalizedProviderRequest {
+  readonly bytes: Uint8Array;
+  readonly digest: string;
+  readonly manifest: import('../context/manifest.js').ContextManifest;
+}
+
+export interface ProviderFinalizationInput {
+  readonly messages: readonly NormalizedMessage[];
+  readonly tools?: readonly ToolSchema[];
+  readonly maxOutputTokens?: number;
+  readonly manifest: import('../context/manifest.js').ContextManifest;
 }
 
 /** Normalized result: either a final answer or a proposed tool call. */
 export type ProviderResult =
-  | { readonly kind: 'final'; readonly text: string }
-  | { readonly kind: 'tool_call'; readonly toolName: string; readonly input: Record<string, unknown> };
+  | { readonly kind: 'final'; readonly text: string; readonly usage?: ProviderUsage }
+  | { readonly kind: 'tool_call'; readonly toolName: string; readonly input: Record<string, unknown>; readonly usage?: ProviderUsage };
 
 export type TokenSink = (delta: string) => void;
 
@@ -81,10 +102,10 @@ export interface ProviderAdapter {
   availability(apiKeyPresent: boolean): ProviderAvailability;
   /** Classify an error for retry/rate-limit handling (ADR 0004). */
   classifyError(err: unknown): RetryableErrorMeta;
-  /**
-   * Execute one turn. `apiKey` is required; callers must check availability
-   * first. `onToken` streams text deltas to the UI when supported.
-   */
+  /** Finalize the exact request bytes and bind them to a manifest. Production
+   * reasoning adapters must implement this; dispatch blocks if absent. */
+  finalize?(input: ProviderFinalizationInput): FinalizedProviderRequest;
+  /** Execute one turn. `apiKey` is required and finalized bytes are mandatory. */
   complete(request: ProviderRequest, apiKey: string, onToken?: TokenSink): Promise<ProviderResult>;
 }
 
