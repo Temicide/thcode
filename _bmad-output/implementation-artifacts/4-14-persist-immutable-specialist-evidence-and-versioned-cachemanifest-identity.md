@@ -2,9 +2,11 @@
 title: 'Story 4.14: Persist immutable Specialist Evidence and versioned CacheManifest identity'
 type: 'feature'
 created: '2026-07-17'
-status: 'ready-for-dev'
+status: 'done'
+baseline_revision: '12d1a38'
+final_revision: 'c99f1ad'
 review_loop_iteration: 0
-followup_review_recommended: false
+followup_review_recommended: true
 context:
   - '{project-root}/_bmad-output/implementation-artifacts/epic-4-context.md'
 warnings: []
@@ -98,3 +100,51 @@ Reuse the 4.9 `SpecialistResult`/`SpecialistFailure`/`SpecialistFieldValue`/`Con
 - `npm run build` -- expected: tsc clean.
 - `npm test -- specialistEvidence` -- expected: all pass.
 - `npm test` -- expected: full suite green, no regressions.
+
+## Review Triage Log
+
+### 2026-07-18 — Review pass
+- intent_gap: 0
+- bad_spec: 0
+- patch: 4: (medium 4)
+- defer: 0
+- reject: 11
+- addressed_findings:
+  - `[medium]` `[patch]` seal.ts synthesized a placeholder `ConsentReference` (all-empty) for failure outcomes — invented data in a provenance-critical immutable envelope. Removed the synthesis; `consentReference` is now required for failure outcomes (throws a typed error if absent). Results still default it from `outcome.consentReference`.
+  - `[medium]` `[patch]` seal.ts synthesized a placeholder `serviceIdentity` (empty Thai/English names + versions) for failure outcomes. Removed; `serviceIdentity` is now required for failure outcomes (throws if absent). Results still default from `outcome.serviceIdentity`.
+  - `[medium]` `[patch]` Structured-field sanitization stringified→sanitized→re-parsed the whole object; on a secret-named key (`token`/`secret`/`password`) the sanitizer produced invalid JSON and the catch replaced the ENTIRE object with `{ '[sanitized]': true }`, destroying all legitimate sibling data — violating the spec's "keep the original field structure." Replaced with a recursive `sanitizeStringLeaves` walk that redacts only string leaves and preserves all non-string values and shape; completeness still downgrades on omissions.
+  - `[medium]` `[patch]` app.ts `sealSpecialistEvidence` injected a silent default `requestOptions {30000,2}` when computing `cacheManifestDigest`, which would make the evidence digest mismatch the real request's manifest (breaking 4.15 cache reuse). Now the digest is computed only when `requestOptions` (and the other request-input fields) are explicitly provided; otherwise `cacheManifestDigest` is left `undefined`.
+  - `[low]` `[reject]` Timestamps (`observationTime`/`displayTime`) included in the evidence id hash — correct by design; the id identifies the sealed record (incl. when observed) and `cacheManifestDigest` is the content cache key. Idempotent for exact re-seals.
+  - `[low]` `[reject]` `sourceContentHash = effectiveGenerationId` for failures — explicitly sanctioned by spec Design Notes (no source content on a failure).
+  - `[low]` `[reject]` Cycle guards in `deepFreeze`/`canonicalJson` — unreachable: evidence/cache data crosses a `JSON` boundary (parse/stringify) so it is acyclic by construction.
+  - `[low]` `[reject]` Structured field value being an array/null — the `SpecialistFieldValue` structured variant's `value` is typed `Readonly<Record<string,unknown>>`; not a real edge within contract.
+  - `[low]` `[reject]` `preparedArtifacts[0]?.sourceIdentity.canonicalPath` — `PreparedArtifact.sourceIdentity` is a required (non-optional) field, so the `?.` guard is sufficient.
+  - `[low]` `[reject]` ConsentReference test checking property names only — the existing raw-key-never-in-evidence test already `JSON.stringify`-scans for `Bearer`/`sk-`/raw-key patterns.
+  - `[low]` `[reject]` `\x00` field separator not length-prefixed — `canonicalJson` JSON-encodes all values, so no field can contain a raw null byte; delimiter collisions are unreachable.
+  - `[low]` `[reject]` `preprocessing` stored unsorted while digest sorts — `cacheManifestMatches(a, bInput)` recomputes from an INPUT (which sorts), so matching is correct within contract.
+  - `[low]` `[reject]` `canonicalJson` treats `undefined` and absent keys identically — correct, deterministic behavior for optional fields.
+  - `[low]` `[reject]` `InMemoryEvidenceRepository.store` does not assert frozen — `sealSpecialistEvidence` always deep-freezes and the port is only consumed via `app.ts`; defensive-only, not a real gap.
+
+## Auto Run Result
+
+**Summary:** Implemented the Story 4.14 Specialist Evidence + versioned CacheManifest identity contracts. `types.ts` and `cacheManifest.ts` already existed (committed at `36a11b7`); this run added the sealing, in-memory repository, reuse/fresh projections, barrel, CoreApp accessors, and the test suite — then applied 4 review-driven patches.
+
+**Files changed:**
+- `cli/src/core/specialists/evidence/seal.ts` (NEW) — `sealSpecialistEvidence()`: immutable, sanitized, deterministic `ev-${sha256}` id, deep-freeze; result + failure paths; no invented data.
+- `cli/src/core/specialists/evidence/repository.ts` (NEW) — `InMemoryEvidenceRepository` (port + in-memory store; frozen records).
+- `cli/src/core/specialists/evidence/projection.ts` (NEW) — `projectReusedEvidence` / `projectFreshEvidence`.
+- `cli/src/core/specialists/evidence/index.ts` (NEW) — barrel.
+- `cli/src/core/specialists/evidence/cacheManifest.ts` (MOD) — exported `canonicalJson` for reuse by seal.
+- `cli/src/core/app.ts` (MOD) — `specialistEvidenceRepository()`, `computeSpecialistCacheManifest()`, `sealSpecialistEvidence()` accessors; lazy `_specialistEvidenceRepo`.
+- `cli/test/specialistEvidence.test.ts` (NEW) — 42 tests covering every I/O matrix row + AC.
+
+**Review findings breakdown:** 4 patches applied (invented-data removal ×2, structured-sanitization structure preservation, cache-digest option fabrication), 0 deferred, 11 rejected.
+
+**Follow-up review recommendation:** `true` — the final pass made review-driven changes with data-integrity (no invented provenance data), sanitization (structured-field structure preservation), and cache-correctness (no fabricated request options) impact; an independent follow-up review would confirm the patch quality.
+
+**Verification performed:**
+- `npm run build` → tsc clean (no errors, no unused locals/params).
+- `npx vitest run specialistEvidence` → 42/42 pass.
+- `npx vitest run` → 58 files / 1577 tests pass (baseline 57 files / 1535 tests; +1 file, +42 tests).
+
+**Residual risks:** Failure-outcome sealing now requires the caller to supply a real `ConsentReference` and `serviceIdentity`; callers that cannot (e.g. a pre-consent refusal path) must not call `sealSpecialistEvidence` for a failure. Durable Evidence persistence remains a later epic (4.14 ships the port + in-memory store only).
